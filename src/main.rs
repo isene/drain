@@ -548,10 +548,41 @@ fn spawn_claude_query(claude_text: Arc<Mutex<String>>, summary: String) {
     }
     std::thread::spawn(move || {
         let prompt = format!(
-            "Brief analysis (3-5 sentences, no preamble) of these top \
-             battery drainers from a Linux laptop. Note any obvious \
-             polling-loop / hot-path candidates. The user runs a tiling \
-             X11 session with custom asm tools (glass, tile, strip).\n\n{}",
+            "Battery-drain triage for a Linux laptop. The user runs a \
+             custom asm tiling session: glass (terminal), tile (WM), \
+             strip (status bar), bare (shell), drain itself, all pure \
+             x86_64 asm, event-driven by design (block on poll/read of \
+             X11 fd + PTY fd).\n\n\
+             Calibration — these are EXPECTED, DO NOT flag:\n\
+             - drain polls /proc at 1Hz by design; ~100 w/s is its \
+             monitoring cost. Self-excluded from the suite line.\n\
+             - glass wakes track PTY output 1:1. When claude/CC streams \
+             inside a glass, 40-200 w/s is normal rendering — glass is \
+             the messenger, not the source.\n\
+             - Xorg w/s = sum of client X requests. Multiple glasses \
+             rendering streaming text → 50-200 w/s is downstream \
+             rendering, NOT a sync-GetProperty-on-timer pattern.\n\
+             - strip has an intentional 1Hz safety pull (~6 syscalls/sec, \
+             documented choice). Don't flag.\n\
+             - claude/CC processes run a JS event loop at 500-1500 w/s \
+             when active. That's the agent runtime, out of scope.\n\
+             - pipewire-pulse at 100-300 w/s is the audio graph at \
+             idle. Only suspicious if no audio app holds a stream.\n\
+             - kworker/uN:N-i915 wakes track GPU activity driven by \
+             above clients. They fall on their own when clients quiet.\n\n\
+             What TO flag (rates that exceed visible work):\n\
+             - asm tools whose wakes can't be explained by user activity \
+             (e.g. tile at 30 w/s when no windows moving / no input)\n\
+             - processes the user didn't intentionally start\n\
+             - kworker hotspots that name a specific subsystem AND \
+             persist when the obvious driver (browser, terminal) is idle\n\
+             - Fe2O3 Rust tools (rush, kastrup, tock, scribe, scroll, \
+             pointer, watchit, prism) that aren't designed to poll\n\n\
+             Format: 3-5 plain sentences. No preamble. No scare quotes. \
+             No 'anti-pattern' language. Lead with the single most \
+             actionable observation, or say 'no actionable signal — \
+             suite is behaving' if everything matches the calibration.\n\n\
+             Top processes:\n{}",
             summary
         );
         let mut child = match Command::new("claude")
