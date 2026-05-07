@@ -15,6 +15,7 @@ pub struct Snap {
     pub write_bytes: u64,  // /proc/<pid>/io write_bytes
     pub comm: String,      // process name (15 chars max from comm)
     pub state: char,       // R/S/D/Z etc.
+    pub ppid: u32,         // parent pid — used to resolve WS via ancestor walk
 }
 
 #[derive(Clone, Debug)]
@@ -23,6 +24,7 @@ pub struct Delta {
     pub comm: String,
     #[allow(dead_code)]
     pub state: char,
+    pub ppid: u32,
     pub cpu_pct: f64,      // (utime + stime) per second / nproc / clock_tps * 100
     pub wakes_per_s: f64,  // voluntary_ctxt_switches/s — polling proxy
     pub nvol_per_s: f64,   // nonvoluntary_ctxt_switches/s
@@ -34,7 +36,7 @@ fn read_to_string_silent(path: &str) -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
-fn parse_stat(content: &str) -> Option<(u64, u64, char)> {
+fn parse_stat(content: &str) -> Option<(u64, u64, char, u32)> {
     // Format: pid (comm) state ppid ... utime stime ...
     // Find the closing paren, then split the rest.
     let close = content.rfind(')')?;
@@ -42,13 +44,14 @@ fn parse_stat(content: &str) -> Option<(u64, u64, char)> {
     let mut it = rest.split_ascii_whitespace();
     let state_s = it.next()?;
     let state = state_s.chars().next().unwrap_or('?');
-    // Skip ppid, pgrp, session, tty_nr, tpgid, flags, minflt, cminflt, majflt, cmajflt
-    for _ in 0..10 {
+    let ppid: u32 = it.next()?.parse().ok()?;
+    // Skip pgrp, session, tty_nr, tpgid, flags, minflt, cminflt, majflt, cmajflt
+    for _ in 0..9 {
         it.next()?;
     }
     let utime: u64 = it.next()?.parse().ok()?;
     let stime: u64 = it.next()?.parse().ok()?;
-    Some((utime, stime, state))
+    Some((utime, stime, state, ppid))
 }
 
 fn parse_status_field(content: &str, key: &str) -> Option<u64> {
@@ -105,7 +108,7 @@ pub fn snapshot() -> HashMap<u32, Snap> {
             None => continue, // PID exited
         };
         let comm = parse_comm(&stat);
-        let (utime, stime, state) = match parse_stat(&stat) {
+        let (utime, stime, state, ppid) = match parse_stat(&stat) {
             Some(t) => t,
             None => continue,
         };
@@ -138,6 +141,7 @@ pub fn snapshot() -> HashMap<u32, Snap> {
                 write_bytes,
                 comm,
                 state,
+                ppid,
             },
         );
     }
@@ -175,6 +179,7 @@ pub fn deltas(a: &HashMap<u32, Snap>, b: &HashMap<u32, Snap>, secs: f64, ncpus: 
             pid: *pid,
             comm: s2.comm.clone(),
             state: s2.state,
+            ppid: s2.ppid,
             cpu_pct,
             wakes_per_s: wakes,
             nvol_per_s: nvol,

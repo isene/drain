@@ -66,6 +66,17 @@ enum Mode {
     StraceView,
 }
 
+/// Outcome of resolving a pid → workspace. Inherited is rendered with
+/// a subtle visual marker so the user can tell it came from a parent
+/// (e.g., "2~" for claude inside glass-on-WS2 instead of just "2").
+#[derive(Clone, Copy, Debug)]
+enum WsAttribution {
+    Direct(u32),    // process has its own X window with _NET_WM_DESKTOP
+    Inherited(u32), // an ancestor in the process tree does
+    Unknown,        // X-managed but missing _NET_WM_DESKTOP
+    None,           // not X-related at all
+}
+
 struct ThreadView {
     pid: u32,
     last_snap: HashMap<u32, Snap>,
@@ -217,10 +228,11 @@ impl App {
     fn top_summary(&self, n: usize) -> String {
         let mut s = String::new();
         for d in self.filtered().iter().take(n) {
-            let ws = match self.wsmap.get(&d.pid) {
-                Some(&u32::MAX) => "?".to_string(),
-                Some(n) => format!("{}", n + 1),
-                None => "-".to_string(),
+            let ws = match self.resolve_ws(d.pid) {
+                WsAttribution::Direct(n) => format!("{}", n + 1),
+                WsAttribution::Inherited(n) => format!("{} (inh)", n + 1),
+                WsAttribution::Unknown => "?".to_string(),
+                WsAttribution::None => "-".to_string(),
             };
             s.push_str(&format!(
                 "{} (pid {}, ws {}): {:.1}% CPU, {:.1} wakes/s, {:.1} kB/s I/O\n",
@@ -228,6 +240,40 @@ impl App {
             ));
         }
         s
+    }
+
+    /// Resolve a process to its workspace. Direct = the process owns
+    /// an X window with _NET_WM_DESKTOP set. Inherited = a parent /
+    /// grandparent / ... in the process tree owns one. Walks at most
+    /// 10 levels up to avoid loops on weird state. The inherited path
+    /// is what makes "claude in glass on WS2" attributable: claude is
+    /// a child of bare which runs inside glass; glass is X-managed.
+    fn resolve_ws(&self, pid: u32) -> WsAttribution {
+        // Direct hit?
+        match self.wsmap.get(&pid) {
+            Some(&u32::MAX) => return WsAttribution::Unknown,
+            Some(n) => return WsAttribution::Direct(*n),
+            None => {}
+        }
+        // Walk parent chain via the live snapshot's ppid.
+        let mut cur = pid;
+        for _ in 0..10 {
+            let parent = match self.last_snap.get(&cur) {
+                Some(s) => s.ppid,
+                None => return WsAttribution::None,
+            };
+            if parent == 0 || parent == cur {
+                return WsAttribution::None;
+            }
+            match self.wsmap.get(&parent) {
+                Some(&u32::MAX) => return WsAttribution::Unknown,
+                Some(n) => return WsAttribution::Inherited(*n),
+                None => {
+                    cur = parent;
+                }
+            }
+        }
+        WsAttribution::None
     }
 
     fn open_threads(&mut self, pid: u32) {
@@ -361,10 +407,15 @@ fn render_table(pane: &mut Pane, app: &App, rows: usize) {
     let take = (rows.saturating_sub(2)).min(visible.len());
     for (i, d) in visible.iter().take(take).enumerate() {
         let col = drain_color(d.drain);
-        let ws = match app.wsmap.get(&d.pid) {
-            Some(&u32::MAX) => "?".to_string(),
-            Some(n) => format!("{}", n + 1),
-            None => "·".to_string(),
+        // Direct WS shows just the number; inherited (e.g., claude
+        // running inside glass-on-WS2) is dimmed + suffixed with "~"
+        // so the user can tell at a glance whether the row owns the
+        // window or borrowed it from an ancestor.
+        let ws = match app.resolve_ws(d.pid) {
+            WsAttribution::Direct(n) => format!("{}", n + 1),
+            WsAttribution::Inherited(n) => format!("\x1b[2m{}~\x1b[0m", n + 1),
+            WsAttribution::Unknown => "?".to_string(),
+            WsAttribution::None => "·".to_string(),
         };
         let comm = comm_short(&d.comm, 20);
         let dot_str = dots(d.drain);

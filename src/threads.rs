@@ -34,7 +34,7 @@ pub fn snapshot_threads(pid: u32) -> HashMap<u32, Snap> {
             Err(_) => continue,
         };
         let comm = parse_comm(&stat);
-        let (utime, stime, state) = match parse_stat(&stat) {
+        let (utime, stime, state, ppid) = match parse_stat(&stat) {
             Some(t) => t,
             None => continue,
         };
@@ -57,6 +57,7 @@ pub fn snapshot_threads(pid: u32) -> HashMap<u32, Snap> {
                 write_bytes: 0,
                 comm,
                 state,
+                ppid,
             },
         );
     }
@@ -97,18 +98,19 @@ pub fn deltas(
     out
 }
 
-fn parse_stat(content: &str) -> Option<(u64, u64, char)> {
+fn parse_stat(content: &str) -> Option<(u64, u64, char, u32)> {
     let close = content.rfind(')')?;
     let rest = &content[close + 2..];
     let mut it = rest.split_ascii_whitespace();
     let state_s = it.next()?;
     let state = state_s.chars().next().unwrap_or('?');
-    for _ in 0..10 {
+    let ppid: u32 = it.next()?.parse().ok()?;
+    for _ in 0..9 {
         it.next()?;
     }
     let utime: u64 = it.next()?.parse().ok()?;
     let stime: u64 = it.next()?.parse().ok()?;
-    Some((utime, stime, state))
+    Some((utime, stime, state, ppid))
 }
 
 fn parse_status_field(content: &str, key: &str) -> Option<u64> {
