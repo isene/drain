@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#0a0a14"/>
+    </linearGradient>
+    <linearGradient id="rust" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f74c00"/>
+      <stop offset="100%" style="stop-color:#b7410e"/>
+    </linearGradient>
+    <linearGradient id="charge" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#46e060"/>
+      <stop offset="50%" style="stop-color:#e0d020"/>
+      <stop offset="100%" style="stop-color:#f74c00"/>
+    </linearGradient>
+    <radialGradient id="drop" cx="50%" cy="40%" r="55%">
+      <stop offset="0%" style="stop-color:#ffae6b"/>
+      <stop offset="60%" style="stop-color:#f74c00"/>
+      <stop offset="100%" style="stop-color:#7a2400"/>
+    </radialGradient>
+  </defs>
+  <style>
+    @keyframes fall1 {
+      0%   { transform: translate(0px, 0px); opacity: 0; }
+      10%  { opacity: 1; }
+      80%  { opacity: 0.8; }
+      100% { transform: translate(0px, 64px); opacity: 0; }
+    }
+    @keyframes fall2 {
+      0%   { transform: translate(0px, 0px); opacity: 0; }
+      20%  { opacity: 1; }
+      80%  { opacity: 0.6; }
+      100% { transform: translate(0px, 60px); opacity: 0; }
+    }
+    @keyframes fall3 {
+      0%   { transform: translate(0px, 0px); opacity: 0; }
+      15%  { opacity: 1; }
+      80%  { opacity: 0.7; }
+      100% { transform: translate(0px, 56px); opacity: 0; }
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.85; }
+      50%      { opacity: 0.6;  }
+    }
+    .drop1 { animation: fall1 2.0s ease-in infinite; transform-origin: center; }
+    .drop2 { animation: fall2 2.4s ease-in infinite 0.5s; transform-origin: center; }
+    .drop3 { animation: fall3 2.6s ease-in infinite 1.0s; transform-origin: center; }
+    .charge-bar { animation: pulse 3s ease-in-out infinite; }
+  </style>
+
+  <!-- Outer disc + rust border -->
+  <circle cx="128" cy="128" r="120" fill="url(#bg)" stroke="url(#rust)" stroke-width="3"/>
+
+  <!-- Battery body, slightly above centre to leave room for drops -->
+  <!-- Battery body (rounded rect) and cap -->
+  <g transform="translate(76, 78)">
+    <!-- main body -->
+    <rect x="0" y="0" width="92" height="48" rx="6" ry="6"
+          fill="#0a0a14" stroke="#cfe8ff" stroke-width="3"/>
+    <!-- positive cap on the right -->
+    <rect x="92" y="14" width="8" height="20" rx="2" ry="2" fill="#cfe8ff"/>
+    <!-- charge bars: three segments, leftmost green, rightmost orange,
+         middle yellow — captures the "draining" metaphor visually -->
+    <rect class="charge-bar" x="6"  y="6" width="24" height="36" rx="2" ry="2"
+          fill="url(#charge)" opacity="0.85"/>
+    <rect class="charge-bar" x="34" y="6" width="24" height="36" rx="2" ry="2"
+          fill="url(#charge)" opacity="0.55"/>
+    <rect class="charge-bar" x="62" y="6" width="24" height="36" rx="2" ry="2"
+          fill="url(#charge)" opacity="0.25"/>
+  </g>
+
+  <!-- Drops falling from beneath the battery -->
+  <!-- Drop shape: classic teardrop, point up, rounded bottom -->
+  <g transform="translate(0, 130)">
+    <g class="drop1">
+      <path d="M 96 0 C 96 0, 88 8, 88 14 A 8 8 0 0 0 104 14 C 104 8, 96 0, 96 0 Z"
+            fill="url(#drop)"/>
+    </g>
+    <g class="drop2">
+      <path d="M 128 0 C 128 0, 120 8, 120 14 A 8 8 0 0 0 136 14 C 136 8, 128 0, 128 0 Z"
+            fill="url(#drop)"/>
+    </g>
+    <g class="drop3">
+      <path d="M 160 0 C 160 0, 152 8, 152 14 A 8 8 0 0 0 168 14 C 168 8, 160 0, 160 0 Z"
+            fill="url(#drop)"/>
+    </g>
+  </g>
+
+  <!-- Wattage tick marks beneath, evoking a meter scale -->
+  <g stroke="#5a5a72" stroke-width="1" opacity="0.5">
+    <line x1="64"  y1="216" x2="64"  y2="222"/>
+    <line x1="80"  y1="216" x2="80"  y2="220"/>
+    <line x1="96"  y1="216" x2="96"  y2="222"/>
+    <line x1="112" y1="216" x2="112" y2="220"/>
+    <line x1="128" y1="216" x2="128" y2="224" stroke="#f74c00" stroke-width="2"/>
+    <line x1="144" y1="216" x2="144" y2="220"/>
+    <line x1="160" y1="216" x2="160" y2="222"/>
+    <line x1="176" y1="216" x2="176" y2="220"/>
+    <line x1="192" y1="216" x2="192" y2="222"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="128" y="240" text-anchor="middle"
+        font-family="system-ui, -apple-system, sans-serif"
+        font-size="16" font-weight="700" fill="#cfe8ff" letter-spacing="2">
+    drain
+  </text>
+</svg>
