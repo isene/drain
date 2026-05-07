@@ -1,6 +1,6 @@
 [package]
 name = "drain"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Geir Isene <g@isene.com>"]
 description = "Battery-drain triage TUI: top wakers, top CPU, per-process WS attribution. Catches inadvertent polling. Part of the Fe2O3 Rust terminal suite."

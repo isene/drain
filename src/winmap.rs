@@ -36,13 +36,17 @@ impl WinMap {
         })
     }
 
-    /// Build a {pid → workspace_index} map by walking _NET_CLIENT_LIST.
-    /// Workspace numbering matches what tile / EWMH expose: 0-based.
+    /// Build a {pid → workspace_index} map. Tries _NET_CLIENT_LIST
+    /// first (EWMH-standard, what most WMs publish) and falls back
+    /// to walking root's direct children via QueryTree (works on
+    /// minimal WMs like tile that don't publish the client list).
+    /// Workspace numbering matches the per-window _NET_WM_DESKTOP
+    /// atom — 0-based.
     pub fn refresh(&self) -> HashMap<u32, u32> {
         let mut out = HashMap::new();
         let windows = match self.get_atom_array(self.root, self.atom_client_list, AtomEnum::WINDOW.into()) {
-            Some(v) => v,
-            None => return out,
+            Some(v) if !v.is_empty() => v,
+            _ => self.query_tree_root(),
         };
         for w in windows {
             let pid = self
@@ -51,15 +55,27 @@ impl WinMap {
             let desk = self
                 .get_atom_array(w, self.atom_wm_desktop, AtomEnum::CARDINAL.into())
                 .and_then(|v| v.first().copied());
-            if let (Some(p), Some(d)) = (pid, desk) {
-                // Keep the lowest workspace seen — if firefox spawns
-                // sub-windows on different WSes, the first-found
-                // wins. Good enough for the "which WS is burning" use
-                // case where the user knows their layout.
-                out.entry(p).or_insert(d);
+            if let Some(p) = pid {
+                // If _NET_WM_DESKTOP is missing (tile pre-patch, some
+                // legacy apps), record the pid with a sentinel
+                // workspace so the column shows the pid is "X-managed
+                // but unknown WS" instead of the blank ·-for-no-X-info.
+                let ws = desk.unwrap_or(u32::MAX);
+                out.entry(p).or_insert(ws);
             }
         }
         out
+    }
+
+    fn query_tree_root(&self) -> Vec<u32> {
+        let reply = match self.conn.query_tree(self.root) {
+            Ok(c) => c.reply().ok(),
+            Err(_) => None,
+        };
+        match reply {
+            Some(r) => r.children,
+            None => Vec::new(),
+        }
     }
 
     fn get_atom_array(&self, win: u32, prop: Atom, ty: Atom) -> Option<Vec<u32>> {
