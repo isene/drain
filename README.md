@@ -1,10 +1,10 @@
 # drain
 
-<img src="img/drain.svg" align="right" width="150">
+<img src="img/drain.svg" align="left" width="150" height="150">
 
 **Battery-drain triage TUI. Catches the polling loop you didn't mean to write.**
 
-![Version](https://img.shields.io/badge/version-0.1.4-blue) ![Rust](https://img.shields.io/badge/language-Rust-f74c00) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux-blue) ![Stay Amazing](https://img.shields.io/badge/Stay-Amazing-important)
+![Version](https://img.shields.io/badge/version-0.1.5-blue) ![Rust](https://img.shields.io/badge/language-Rust-f74c00) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux-blue) ![Stay Amazing](https://img.shields.io/badge/Stay-Amazing-important)
 
 Small TUI that answers one question fast: **what is draining my
 battery right now, and did I just make it worse?**
