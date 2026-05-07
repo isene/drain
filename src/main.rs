@@ -343,19 +343,22 @@ fn render_header(pane: &mut Pane, app: &App, cols: u16) {
     pane.refresh();
 }
 
-fn render_table(pane: &mut Pane, app: &App, rows: usize) {
+fn render_suite(pane: &mut Pane, app: &App, cols: u16) {
     let suite_rows = suite::summarize(&app.deltas);
-    let suite_line = suite::format_line(&suite_rows);
+    let line = suite::format_line(&suite_rows, cols as usize);
+    pane.set_text(&line);
+    pane.refresh();
+}
+
+fn render_table(pane: &mut Pane, app: &App, rows: usize) {
     let header = format!(
         " {:>8}  {:<20}  {:>2}  \x1b[48;5;235m {:>5} \x1b[0m  {:>8}  {:>8}  {:>8}  {:>5}",
         "PID", "PROC", "WS", "CPU%", "WAKE/s", "NVOL/s", "IO kB/s", "DRAIN"
     );
     let mut out = String::new();
-    out.push_str(&suite_line);
-    out.push('\n');
     out.push_str(&format!("\x1b[1;38;5;250m{}\x1b[0m\n", header));
     let visible = app.filtered();
-    let take = (rows.saturating_sub(3)).min(visible.len());
+    let take = (rows.saturating_sub(2)).min(visible.len());
     for (i, d) in visible.iter().take(take).enumerate() {
         let col = drain_color(d.drain);
         let ws = match app.wsmap.get(&d.pid) {
@@ -588,10 +591,11 @@ fn main() {
     let (cols, rows) = Crust::terminal_size();
     let layout = compute_layout(cols, rows);
     let mut header = Pane::new(1, 1, cols, 1, 255, 236);
-    let mut table = Pane::new(1, 2, layout.table_w, layout.body_h, 231, 0);
+    let mut suite_pane = Pane::new(1, 2, cols, 1, 231, 234);
+    let mut table = Pane::new(1, 3, layout.table_w, layout.body_h, 231, 0);
     let mut analysis = Pane::new(
         layout.table_w + 2,
-        2,
+        3,
         layout.analysis_w.saturating_sub(1),
         layout.body_h,
         231,
@@ -608,6 +612,7 @@ fn main() {
 
     loop {
         render_header(&mut header, &app, cols);
+        render_suite(&mut suite_pane, &app, cols);
         match app.mode {
             Mode::Threads(_) => render_threads(&mut table, &app, layout.body_h as usize),
             _ => render_table(&mut table, &app, layout.body_h as usize),
@@ -730,10 +735,11 @@ fn main() {
                 let (c2, r2) = Crust::terminal_size();
                 let l2 = compute_layout(c2, r2);
                 header = Pane::new(1, 1, c2, 1, 255, 236);
-                table = Pane::new(1, 2, l2.table_w, l2.body_h, 231, 0);
+                suite_pane = Pane::new(1, 2, c2, 1, 231, 234);
+                table = Pane::new(1, 3, l2.table_w, l2.body_h, 231, 0);
                 analysis = Pane::new(
                     l2.table_w + 2,
-                    2,
+                    3,
                     l2.analysis_w.saturating_sub(1),
                     l2.body_h,
                     231,
@@ -767,6 +773,8 @@ fn compute_layout(cols: u16, rows: u16) -> Layout {
         cols.saturating_sub(30)
     };
     let analysis_w = cols.saturating_sub(table_w + 1);
-    let body_h = rows.saturating_sub(2);
+    // Rows used: header(1) + suite(1) + footer(1). Body rows for the
+    // table + analysis split = rows - 3.
+    let body_h = rows.saturating_sub(3);
     Layout { table_w, analysis_w, body_h }
 }

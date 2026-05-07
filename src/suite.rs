@@ -12,12 +12,15 @@ pub struct SuiteRow {
     pub wakes_per_s: f64,
 }
 
+// CHasm asm-suite processes. Excludes drain itself — drain polls /proc
+// at 1Hz which is "the cost of monitoring", not a regression in the asm
+// foundation. Showing drain here would always paint the suite line red
+// for no actionable reason.
 const TRACKED: &[&str] = &[
     "glass",
     "tile",
     "strip",
     "bare",
-    "drain",
     // chasm-bits asmites
     "battery",
     "brightness",
@@ -64,10 +67,23 @@ pub fn summarize(deltas: &[Delta]) -> Vec<SuiteRow> {
     rows
 }
 
-/// Render as a single line for the pinned summary row.
-pub fn format_line(rows: &[SuiteRow]) -> String {
+/// Render as a single line for the pinned summary row, truncated to
+/// max_width visible chars and wrapped in a dark-grey bg so it stands
+/// out from the column header below. The asm-suite design goal is
+/// sub-10 wakes/s when idle, so the colour thresholds are calibrated
+/// tighter than the main table:
+///   ≥ 30 w/s   red    (something is running a tight loop)
+///   ≥ 10 w/s   orange (active use OR mild regression)
+///    ≥ 3 w/s   yellow (normal during typing / scrolling)
+///    ≥ 1 w/s   green  (light activity)
+///    < 1 w/s   dim    (idle — what we want)
+pub fn format_line(rows: &[SuiteRow], max_width: usize) -> String {
+    let bg = "\x1b[48;5;234m";
+    let reset = "\x1b[0m";
     if rows.is_empty() {
-        return "  CHasm suite: (no tracked tools running)".to_string();
+        let body = "  suite: (no tracked asm tools running)";
+        let pad_n = max_width.saturating_sub(body.chars().count());
+        return format!("{}{}{}{}", bg, body, " ".repeat(pad_n), reset);
     }
     let mut parts: Vec<String> = rows
         .iter()
@@ -77,14 +93,11 @@ pub fn format_line(rows: &[SuiteRow]) -> String {
             } else {
                 String::new()
             };
-            // Color by aggregate wakes/s. The asm suite design goal is
-            // sub-10 wakes/s when idle — anything higher gets the
-            // yellow/orange treatment.
-            let col = if r.wakes_per_s >= 50.0 {
+            let col = if r.wakes_per_s >= 30.0 {
                 196
-            } else if r.wakes_per_s >= 20.0 {
-                208
             } else if r.wakes_per_s >= 10.0 {
+                208
+            } else if r.wakes_per_s >= 3.0 {
                 226
             } else if r.wakes_per_s >= 1.0 {
                 46
@@ -92,11 +105,67 @@ pub fn format_line(rows: &[SuiteRow]) -> String {
                 244
             };
             format!(
-                "\x1b[38;5;{}m{}{} {:.1}w/s\x1b[0m",
-                col, r.name, inst, r.wakes_per_s
+                "\x1b[38;5;{};48;5;234m{}{} {:.1}w/s\x1b[0m{}",
+                col, r.name, inst, r.wakes_per_s, bg
             )
         })
         .collect();
-    parts.insert(0, "\x1b[38;5;250msuite:\x1b[0m".to_string());
-    format!("  {}", parts.join("  "))
+    parts.insert(0, format!("\x1b[38;5;250;48;5;234msuite:\x1b[0m{}", bg));
+    let body = format!("  {}", parts.join("  "));
+    // Compute visible width so we can truncate-with-ellipsis when the
+    // line exceeds the pane. Visible-width calc strips ANSI.
+    let visible: String = strip_ansi(&body);
+    let vis_n = visible.chars().count();
+    let final_body = if vis_n <= max_width {
+        let pad = max_width.saturating_sub(vis_n);
+        format!("{}{}{}", body, " ".repeat(pad), reset)
+    } else {
+        // Walk visible chars up to max_width-1 and copy through ANSI
+        // sequences as we go, then trail with "…" + bg-padded reset.
+        let mut out = String::with_capacity(body.len());
+        let mut count = 0;
+        let mut in_esc = false;
+        for c in body.chars() {
+            if c == '\x1b' {
+                in_esc = true;
+                out.push(c);
+                continue;
+            }
+            if in_esc {
+                out.push(c);
+                if c == 'm' {
+                    in_esc = false;
+                }
+                continue;
+            }
+            if count >= max_width.saturating_sub(1) {
+                break;
+            }
+            out.push(c);
+            count += 1;
+        }
+        out.push('…');
+        out.push_str(reset);
+        out
+    };
+    final_body
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_esc = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_esc = true;
+            continue;
+        }
+        if in_esc {
+            if c == 'm' {
+                in_esc = false;
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }
