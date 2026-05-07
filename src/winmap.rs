@@ -56,12 +56,21 @@ impl WinMap {
                 .get_atom_array(w, self.atom_wm_desktop, AtomEnum::CARDINAL.into())
                 .and_then(|v| v.first().copied());
             if let Some(p) = pid {
-                // If _NET_WM_DESKTOP is missing (tile pre-patch, some
-                // legacy apps), record the pid with a sentinel
-                // workspace so the column shows the pid is "X-managed
-                // but unknown WS" instead of the blank ·-for-no-X-info.
-                let ws = desk.unwrap_or(u32::MAX);
-                out.entry(p).or_insert(ws);
+                // Multi-window apps (Firefox spawns ~8 hidden helpers
+                // sharing the same _NET_WM_PID) confuse a naive
+                // first-wins map: the WM only sets _NET_WM_DESKTOP on
+                // its tracked top-levels, not on 1×1 popup helpers.
+                // Always prefer a real desktop value over the missing
+                // sentinel; if every window for a pid lacks the
+                // property, fall back to the sentinel.
+                match desk {
+                    Some(d) => {
+                        out.insert(p, d);
+                    }
+                    None => {
+                        out.entry(p).or_insert(u32::MAX);
+                    }
+                }
             }
         }
         out
