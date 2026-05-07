@@ -1,6 +1,6 @@
 [package]
 name = "drain"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 authors = ["Geir Isene <g@isene.com>"]
 description = "Battery-drain triage TUI: top wakers, top CPU, per-process WS attribution. Catches inadvertent polling. Part of the Fe2O3 Rust terminal suite."
@@ -9,7 +9,7 @@ repository = "https://github.com/isene/drain"
 
 [dependencies]
 crust = { version = "0.1", path = "../crust", package = "fe2o3-crust" }
-x11rb = { version = "0.13", default-features = false, features = ["allow-unsafe-code"] }
+x11rb = { version = "0.13", default-features = false }
 libc = "0.2"
 
 [profile.release]
