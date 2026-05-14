@@ -26,12 +26,12 @@ jobs:
     # are Linux specifics. macOS targets are intentionally absent.
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: drain
 
       - name: Checkout crust
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: isene/crust
           path: crust
@@ -69,7 +69,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
