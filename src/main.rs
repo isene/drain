@@ -592,18 +592,33 @@ fn strip_ansi_for_width(s: &str) -> String {
     out
 }
 
-fn spawn_claude_query(claude_text: Arc<Mutex<String>>, summary: String) {
+fn spawn_claude_query(claude_text: Arc<Mutex<String>>, summary: String, watts: Option<f64>) {
     {
         let mut t = claude_text.lock().unwrap();
         *t = "querying claude...".to_string();
     }
     std::thread::spawn(move || {
+        let drain_line = match watts {
+            Some(w) => format!("{:.2} W", w),
+            None => "unknown".to_string(),
+        };
         let prompt = format!(
             "Battery-drain triage for a Linux laptop. The user runs a \
              custom asm tiling session: glass (terminal), tile (WM), \
              strip (status bar), bare (shell), drain itself, all pure \
              x86_64 asm, event-driven by design (block on poll/read of \
              X11 fd + PTY fd).\n\n\
+             Current total system drain: {drain}. Target budget: 3.5 W.\n\
+             PRIMARY QUESTION: if drain is above 3.5 W, explain WHY — what \
+             is pushing it over. Separate the irreducible hardware floor \
+             (panel/backlight, SoC package idle, wifi radio — together \
+             typically 2.5-4 W with the screen on) from process-driven \
+             drain. /proc gives wake-rates and CPU%, not per-process watts, \
+             so attribute qualitatively: name the top process contributors \
+             whose CPU%/wakes exceed the calibration below, rank them by \
+             likely watt impact, and say what to do to get back under \
+             3.5 W. If drain is at or below 3.5 W, say it's within budget \
+             and stop.\n\n\
              Calibration — these are EXPECTED, DO NOT flag:\n\
              - drain polls /proc at 1Hz by design; ~100 w/s is its \
              monitoring cost. Self-excluded from the suite line.\n\
@@ -630,11 +645,13 @@ fn spawn_claude_query(claude_text: Arc<Mutex<String>>, summary: String) {
              - Fe2O3 Rust tools (rush, kastrup, tock, scribe, scroll, \
              pointer, watchit, prism) that aren't designed to poll\n\n\
              Format: 3-5 plain sentences. No preamble. No scare quotes. \
-             No 'anti-pattern' language. Lead with the single most \
-             actionable observation, or say 'no actionable signal — \
-             suite is behaving' if everything matches the calibration.\n\n\
-             Top processes:\n{}",
-            summary
+             No 'anti-pattern' language. Lead with the single biggest lever \
+             to get back under 3.5 W, or say 'no actionable signal — suite \
+             is behaving' if everything matches the calibration and drain \
+             is within budget.\n\n\
+             Top processes:\n{summary}",
+            drain = drain_line,
+            summary = summary,
         );
         let mut child = match Command::new("claude")
             .arg("-p")
@@ -690,7 +707,7 @@ fn main() {
     app.tick();
     std::thread::sleep(std::time::Duration::from_millis(800));
     app.tick();
-    spawn_claude_query(Arc::clone(&app.claude_text), app.top_summary(8));
+    spawn_claude_query(Arc::clone(&app.claude_text), app.top_summary(8), app.bat_avg.avg());
 
     loop {
         render_header(&mut header, &app, cols);
@@ -801,7 +818,7 @@ fn main() {
             }
             Some("p") | Some("P") | Some("f") | Some("F") => app.paused = !app.paused,
             Some("c") | Some("C") => {
-                spawn_claude_query(Arc::clone(&app.claude_text), app.top_summary(8));
+                spawn_claude_query(Arc::clone(&app.claude_text), app.top_summary(8), app.bat_avg.avg());
             }
             Some("C-y") | Some("C-Y") => {
                 let txt = app.claude_text.lock().unwrap().clone();
