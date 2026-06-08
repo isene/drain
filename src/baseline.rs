@@ -21,6 +21,11 @@ pub struct BaselineSnapshot {
     pub wakes_median: HashMap<String, f64>,
     pub cpu_median: HashMap<String, f64>,
     pub samples_taken: u64,
+    /// Orphan holders the user chose to ignore. Key = `class:cmd`
+    /// signature (see orphans::Orphan::sig), value = ISO date added.
+    /// Allowlisted holders still show, dimmed, but don't count toward
+    /// the header orphan total.
+    pub allowlist: HashMap<String, String>,
 }
 
 impl BaselineSnapshot {
@@ -121,6 +126,16 @@ fn format_json(s: &BaselineSnapshot) -> String {
         out.push_str(&format!("\n    {}: {}", quote(k), v));
         first = false;
     }
+    out.push_str("\n  },\n");
+    out.push_str("  \"allowlist\": {");
+    let mut first = true;
+    for (k, v) in s.allowlist.iter() {
+        if !first {
+            out.push(',');
+        }
+        out.push_str(&format!("\n    {}: {}", quote(k), quote(v)));
+        first = false;
+    }
     out.push_str("\n  }\n}\n");
     out
 }
@@ -179,6 +194,11 @@ fn parse_json(s: &str) -> Option<BaselineSnapshot> {
                     snap.cpu_median = m;
                     i = ni;
                 }
+                "allowlist" => {
+                    let (m, ni) = parse_string_str_map(bytes, i)?;
+                    snap.allowlist = m;
+                    i = ni;
+                }
                 _ => {
                     i += 1;
                 }
@@ -229,5 +249,40 @@ fn parse_string_f64_map(bytes: &[u8], start: usize) -> Option<(HashMap<String, f
         let (v, ni) = parse_number(bytes, i)?;
         out.insert(key, v);
         i = ni;
+    }
+}
+
+/// Like parse_string_f64_map but values are quoted strings (the allowlist
+/// date stamps). Same shape format_json produces.
+fn parse_string_str_map(bytes: &[u8], start: usize) -> Option<(HashMap<String, String>, usize)> {
+    let mut out = HashMap::new();
+    let mut i = start;
+    while i < bytes.len() && bytes[i] != b'{' {
+        i += 1;
+    }
+    i += 1;
+    loop {
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b',') {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] == b'}' {
+            return Some((out, i + 1));
+        }
+        if bytes[i] != b'"' {
+            return Some((out, i));
+        }
+        let key_end = bytes[i + 1..].iter().position(|&b| b == b'"')? + i + 1;
+        let key = std::str::from_utf8(&bytes[i + 1..key_end]).ok()?.to_string();
+        i = key_end + 1;
+        while i < bytes.len() && (bytes[i] == b':' || bytes[i].is_ascii_whitespace()) {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'"' {
+            return Some((out, i));
+        }
+        let val_end = bytes[i + 1..].iter().position(|&b| b == b'"')? + i + 1;
+        let val = std::str::from_utf8(&bytes[i + 1..val_end]).ok()?.to_string();
+        out.insert(key, val);
+        i = val_end + 1;
     }
 }

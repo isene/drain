@@ -8,6 +8,7 @@
 
 mod baseline;
 mod clipboard;
+mod orphans;
 mod sample;
 mod strace;
 mod suite;
@@ -64,6 +65,10 @@ enum Mode {
     Threads(u32),
     /// Strace histogram. The strace handle is in App.strace_slot.
     StraceView,
+    /// Orphan / held-resource list (held audio sink, idle-inhibitor,
+    /// wifi power_save off, kernel wakelock). Selectable; k/K signal,
+    /// a allowlists.
+    Orphans,
 }
 
 /// Outcome of resolving a pid → workspace. Inherited is rendered with
@@ -106,6 +111,11 @@ struct App {
     mode: Mode,
     thread_view: Option<ThreadView>,
     strace_slot: Arc<Mutex<strace::StraceResult>>,
+    /// Last orphan scan result + when it ran (slow 30 s cadence).
+    orphans: Vec<orphans::Orphan>,
+    last_orphan_scan: Option<Instant>,
+    /// Armed kill awaiting y/n confirmation: (pid, hard, cmd).
+    pending_kill: Option<(u32, bool, String)>,
 }
 
 struct BatRing {
@@ -165,6 +175,9 @@ impl App {
                 rows: Vec::new(),
                 total_calls: 0,
             })),
+            orphans: Vec::new(),
+            last_orphan_scan: None,
+            pending_kill: None,
         }
     }
 
@@ -200,6 +213,28 @@ impl App {
             tv.last_snap = now_t;
             tv.last_t = Instant::now();
         }
+
+        // Orphan / held-resource scan on a slow 30 s cadence (the
+        // subprocess forks would be wasteful at 1 Hz). Gated inside tick()
+        // so it never runs while paused. Reuses the live sample tick — no
+        // separate timer.
+        let due = self
+            .last_orphan_scan
+            .map_or(true, |t| t.elapsed().as_secs() >= 30);
+        if due {
+            self.scan_orphans();
+        }
+    }
+
+    /// Re-run the orphan detectors now (carrying held-durations forward).
+    fn scan_orphans(&mut self) {
+        self.orphans = orphans::detect(&self.orphans, &self.baseline.allowlist);
+        self.last_orphan_scan = Some(Instant::now());
+    }
+
+    /// Non-allowlisted orphan count — the header badge number.
+    fn orphan_count(&self) -> usize {
+        self.orphans.iter().filter(|o| !o.allowlisted).count()
     }
 
     fn sort_deltas(&mut self) {
@@ -291,7 +326,45 @@ impl App {
     fn close_overlay(&mut self) {
         self.thread_view = None;
         self.mode = Mode::Table;
+        self.selected = 0;
     }
+
+    /// Arm a kill of the selected orphan's holder, pending y/n confirm.
+    fn arm_kill(&mut self, hard: bool) {
+        if let Some(o) = self.orphans.get(self.selected) {
+            if o.pid > 0 {
+                self.pending_kill = Some((o.pid, hard, o.cmd.clone()));
+            } else {
+                self.flash = Some((
+                    format!("{} has no pid to signal", o.class.label()),
+                    Instant::now(),
+                ));
+            }
+        }
+    }
+
+    /// Add the selected orphan's holder to the persisted allowlist.
+    fn allowlist_selected(&mut self) {
+        let (sig, cmd) = match self.orphans.get(self.selected) {
+            Some(o) => (o.sig(), o.cmd.clone()),
+            None => return,
+        };
+        self.baseline.allowlist.insert(sig, today_iso());
+        for x in &mut self.orphans {
+            x.allowlisted = self.baseline.allowlist.contains_key(&x.sig());
+        }
+        self.flash = Some((format!("allowlisted {} (persisted)", cmd), Instant::now()));
+    }
+}
+
+fn today_iso() -> String {
+    Command::new("date")
+        .arg("+%Y-%m-%d")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn dots(score: f64) -> String {
@@ -378,6 +451,13 @@ fn render_header(pane: &mut Pane, app: &App, cols: u16) {
         "    sort: {}",
         app.sort.label()
     ));
+    // Orphan/held-resource badge — green 0, yellow ≤2, red ≥3. Only shown
+    // once a scan has run (so it isn't a misleading "0" at startup).
+    if app.last_orphan_scan.is_some() {
+        let n = app.orphan_count();
+        let col = if n == 0 { 46 } else if n <= 2 { 226 } else { 196 };
+        line.push_str(&format!("    orphans:\x1b[38;5;{}m{}\x1b[0m", col, n));
+    }
     if !tags.is_empty() {
         line.push_str(&format!(
             "    \x1b[1;38;5;226m[{}]\x1b[0m",
@@ -492,6 +572,74 @@ fn render_threads(pane: &mut Pane, app: &App, _rows: usize) {
     pane.refresh();
 }
 
+fn fmt_held(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    if s >= 86400 {
+        format!("{}d{}h", s / 86400, (s % 86400) / 3600)
+    } else if s >= 3600 {
+        format!("{}h{}m", s / 3600, (s % 3600) / 60)
+    } else if s >= 60 {
+        format!("{}m", s / 60)
+    } else {
+        format!("{}s", s)
+    }
+}
+
+fn render_orphans(pane: &mut Pane, app: &App, _rows: usize) {
+    let scanned = match app.last_orphan_scan {
+        Some(t) => format!("scanned {} ago", fmt_held(t.elapsed())),
+        None => "scanning…".to_string(),
+    };
+    let head = format!(
+        "\x1b[1;38;5;250m  Orphans — held resources idling on power  ({})  —  Esc to go back\x1b[0m",
+        scanned
+    );
+    let mut out = String::new();
+    out.push_str(&head);
+    out.push_str("\n\n");
+    if app.orphans.is_empty() {
+        out.push_str("  \x1b[38;5;46m✓ none — no resource held open while idle\x1b[0m\n");
+        out.push_str("\n  Classes checked: audio sink (pactl), idle-inhibitor\n");
+        out.push_str("  (systemd-inhibit), wifi power_save, kernel wakelock.\n");
+        pane.set_text(out.trim_end_matches('\n'));
+        pane.refresh();
+        return;
+    }
+    let table_header = format!(
+        " {:<9}  {:>7}  {:<18}  {:>6}  {:>6}  {}",
+        "CLASS", "PID", "HOLDER", "HELD", "~mW", "DETAIL"
+    );
+    out.push_str(&format!("\x1b[1;38;5;250m{}\x1b[0m\n", table_header));
+    for (i, o) in app.orphans.iter().enumerate() {
+        let pid_s = if o.pid > 0 { o.pid.to_string() } else { "·".to_string() };
+        let line = format!(
+            " {:<9}  {:>7}  {:<18}  {:>6}  {:>6}  {}",
+            o.class.label(),
+            pid_s,
+            comm_short(&o.cmd, 18),
+            fmt_held(o.held_since.elapsed()),
+            o.estimated_mw,
+            o.detail
+        );
+        // Allowlisted holders render dim; otherwise color by est. cost.
+        let line = if o.allowlisted {
+            format!("\x1b[2m{}  [allow]\x1b[0m", line)
+        } else {
+            let col = if o.estimated_mw >= 400 { 196 } else if o.estimated_mw >= 250 { 208 } else { 226 };
+            format!("\x1b[38;5;{}m{}\x1b[0m", col, line)
+        };
+        let line = if i == app.selected {
+            format!("\x1b[48;5;238m{}\x1b[0m", line)
+        } else {
+            line
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    pane.set_text(out.trim_end_matches('\n'));
+    pane.refresh();
+}
+
 fn render_analysis(pane: &mut Pane, app: &App) {
     let header = "\x1b[1;38;5;250m─── analysis ───\x1b[0m";
     let mut body = String::new();
@@ -530,7 +678,13 @@ fn render_analysis(pane: &mut Pane, app: &App) {
 }
 
 fn render_footer(pane: &mut Pane, app: &App, cols: u16) {
-    let left = if app.mode == Mode::FilterEdit {
+    let left = if let Some((_, hard, cmd)) = &app.pending_kill {
+        format!(
+            " \x1b[1;38;5;208mSIG{} {}?  y / n\x1b[0m",
+            if *hard { "KILL" } else { "TERM" },
+            cmd
+        )
+    } else if app.mode == Mode::FilterEdit {
         format!(" /{}_  (Enter apply · Esc cancel)", app.filter_input)
     } else if let Some((msg, t)) = &app.flash {
         if t.elapsed().as_secs() < 3 {
@@ -555,13 +709,16 @@ fn keys_line(app: &App) -> String {
     if matches!(app.mode, Mode::Threads(_)) {
         return " ↑↓ select · Esc back".to_string();
     }
+    if app.mode == Mode::Orphans {
+        return " ↑↓ select · k SIGTERM · K SIGKILL · a allowlist · O rescan · Esc back".to_string();
+    }
     if app.show_help {
         format!(
-            " q quit · ↑↓ sel · Enter threads · S strace · s sort ({}) · d diff · / filter · +/- Δt · p pause · c claude · C-y copy · r reset · h hide help",
+            " q quit · ↑↓ sel · Enter threads · S strace · O orphans · s sort ({}) · d diff · / filter · +/- Δt · p pause · c claude · C-y copy · r reset · h hide help",
             app.sort.label()
         )
     } else {
-        " q · ↑↓ · Enter · S · s · d · / · +/- · p · c · C-y · r · h help".to_string()
+        " q · ↑↓ · Enter · S · O · s · d · / · +/- · p · c · C-y · r · h help".to_string()
     }
 }
 
@@ -686,6 +843,26 @@ fn spawn_claude_query(claude_text: Arc<Mutex<String>>, summary: String, watts: O
 }
 
 fn main() {
+    // Headless orphan scan — verification / debugging without the TUI.
+    if std::env::args().skip(1).any(|a| a == "--orphans") {
+        let found = orphans::detect(&[], &HashMap::new());
+        if found.is_empty() {
+            println!("no orphans detected");
+        } else {
+            for o in &found {
+                let pid = if o.pid > 0 { o.pid.to_string() } else { "-".to_string() };
+                println!(
+                    "{:<9} pid={:<7} {:<20} ~{}mW  {}",
+                    o.class.label(),
+                    pid,
+                    o.cmd,
+                    o.estimated_mw,
+                    o.detail
+                );
+            }
+        }
+        return;
+    }
     Crust::init();
     let (cols, rows) = Crust::terminal_size();
     let layout = compute_layout(cols, rows);
@@ -714,6 +891,7 @@ fn main() {
         render_suite(&mut suite_pane, &app, cols);
         match app.mode {
             Mode::Threads(_) => render_threads(&mut table, &app, layout.body_h as usize),
+            Mode::Orphans => render_orphans(&mut table, &app, layout.body_h as usize),
             _ => render_table(&mut table, &app, layout.body_h as usize),
         }
         render_analysis(&mut analysis, &app);
@@ -747,6 +925,35 @@ fn main() {
             continue;
         }
 
+        // Resolve an armed orphan kill: y/Y confirms, anything else cancels.
+        if app.pending_kill.is_some() {
+            let (pid, hard, cmd) = app.pending_kill.take().unwrap();
+            match key_s {
+                Some("y") | Some("Y") => match orphans::kill(pid, hard) {
+                    Ok(()) => {
+                        app.flash = Some((
+                            format!(
+                                "sent SIG{} to {} (pid {})",
+                                if hard { "KILL" } else { "TERM" },
+                                cmd,
+                                pid
+                            ),
+                            Instant::now(),
+                        ));
+                        app.scan_orphans();
+                    }
+                    Err(e) => {
+                        app.flash = Some((format!("kill failed: {}", e), Instant::now()));
+                    }
+                },
+                _ => {
+                    app.flash = Some(("kill cancelled".to_string(), Instant::now()));
+                }
+            }
+            app.tick();
+            continue;
+        }
+
         match key_s {
             Some("q") | Some("Q") => break,
             Some("UP") => {
@@ -759,6 +966,7 @@ fn main() {
                         .as_ref()
                         .map(|t| t.deltas.len())
                         .unwrap_or(0),
+                    Mode::Orphans => app.orphans.len(),
                     _ => app.filtered().len(),
                 };
                 if app.selected + 1 < n_visible {
@@ -774,7 +982,7 @@ fn main() {
                 }
             }
             Some("ESC") => {
-                if matches!(app.mode, Mode::Threads(_) | Mode::StraceView) {
+                if matches!(app.mode, Mode::Threads(_) | Mode::StraceView | Mode::Orphans) {
                     app.close_overlay();
                 }
             }
@@ -787,6 +995,17 @@ fn main() {
                     }
                 }
             }
+            Some("O") => {
+                let was = app.mode == Mode::Orphans;
+                app.scan_orphans();
+                app.mode = Mode::Orphans;
+                if !was {
+                    app.selected = 0;
+                }
+            }
+            Some("k") if app.mode == Mode::Orphans => app.arm_kill(false),
+            Some("K") if app.mode == Mode::Orphans => app.arm_kill(true),
+            Some("a") if app.mode == Mode::Orphans => app.allowlist_selected(),
             Some("s") => {
                 app.sort = app.sort.next();
                 app.sort_deltas();

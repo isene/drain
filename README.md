@@ -59,6 +59,15 @@ the wakeups it causes the whole CPU package to do.
 - **`strace -c` integration** (`S`) — attach to selected pid for 3s,
   show syscall histogram in the analysis pane. Answers "what is it
   actually doing?" without leaving drain
+- **Orphan / held-resource detector** (`O`) — the *resource held open
+  but idle* drain class the wakes/CPU sampler misses: a non-corked
+  audio sink, a block-mode idle-inhibitor, wifi `power_save` off, or a
+  kernel wakelock. Each costs hundreds of mW while CPU%/wakes read
+  zero. Header shows an `orphans:N` badge (green 0 · yellow ≤2 · red
+  ≥3). In the view, `k`/`K` SIGTERM/SIGKILL the holder (with confirm),
+  `a` adds it to a persisted allowlist. Scanned on a slow 30 s cadence
+  (skipped while paused) — two short subprocesses + two stat reads, no
+  polling loop. (`drain --orphans` prints a headless scan.)
 - **claude analysis pane** — `claude -p` runs at startup and on `c`
   with the top drainers as prompt; suggests likely polling-loop
   candidates. `Ctrl+Y` copies the analysis to your clipboard via
@@ -91,7 +100,10 @@ strace mode, or set `kernel.yama.ptrace_scope = 0` for your session.
 | `↑` / `↓` | move row selection |
 | `Enter` | expand selected pid into per-thread view |
 | `S` | attach `strace -c` to selected pid for 3s |
-| `Esc` | close threads / strace overlay |
+| `O` | open / rescan the orphan (held-resource) view |
+| `k` / `K` | in orphan view: SIGTERM / SIGKILL the holder (y/n confirm) |
+| `a` | in orphan view: allowlist the selected holder (persisted) |
+| `Esc` | close threads / strace / orphan overlay |
 | `s` | cycle sort: drain → cpu → wakes → io → drain |
 | `d` | toggle diff mode (highlight anomalies vs baseline) |
 | `/` | enter filter; type substring; `Enter` apply, `Esc` cancel |
