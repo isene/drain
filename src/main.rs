@@ -335,8 +335,12 @@ impl App {
             if o.pid > 0 {
                 self.pending_kill = Some((o.pid, hard, o.cmd.clone()));
             } else {
+                // wifi-ps / wakelock aren't a process you can signal. The
+                // useful action is to allowlist (e.g. wifi power_save off is
+                // usually an intentional NetworkManager policy) so it stops
+                // counting toward the orphan badge.
                 self.flash = Some((
-                    format!("{} has no pid to signal", o.class.label()),
+                    format!("{} isn't a process — press a to allowlist it", o.class.label()),
                     Instant::now(),
                 ));
             }

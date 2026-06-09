@@ -84,7 +84,15 @@ pub fn spawn_strace(slot: Arc<Mutex<StraceResult>>, pid: u32, secs: u64) {
             pid,
             running: false,
             error: if parsed.0.is_empty() && stderr.contains("attach") {
-                Some(stderr.lines().next().unwrap_or("attach failed").to_string())
+                let first = stderr.lines().next().unwrap_or("attach failed");
+                // The common case on a hardened kernel: yama ptrace_scope=1
+                // blocks attaching to non-descendant pids. Turn the cryptic
+                // "Operation not permitted" into the actual fix.
+                if first.contains("Operation not permitted") || first.contains("ptrace") {
+                    Some("ptrace blocked (yama ptrace_scope). Fix: sudo sysctl -w kernel.yama.ptrace_scope=0  (or run drain with sudo)".to_string())
+                } else {
+                    Some(first.to_string())
+                }
             } else {
                 None
             },
