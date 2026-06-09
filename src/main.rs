@@ -69,6 +69,9 @@ enum Mode {
     /// wifi power_save off, kernel wakelock). Selectable; k/K signal,
     /// a allowlists.
     Orphans,
+    /// Firefox content/helper processes (the per-tab Fission renderers),
+    /// opened with ENTER on firefox-bin. Selectable; k/K kill the tab.
+    Firefox,
 }
 
 /// Outcome of resolving a pid → workspace. Inherited is rendered with
@@ -327,6 +330,28 @@ impl App {
         self.thread_view = None;
         self.mode = Mode::Table;
         self.selected = 0;
+    }
+
+    /// Firefox content/helper processes (the Fission per-tab renderers),
+    /// sorted by drain so the rogue tab floats to the top. Matched by comm
+    /// (kernel-truncated), so no fragile ppid walking across the launcher.
+    fn firefox_procs(&self) -> Vec<&Delta> {
+        let mut v: Vec<&Delta> = self
+            .deltas
+            .iter()
+            .filter(|d| is_firefox_content(&d.comm))
+            .collect();
+        v.sort_by(|a, b| b.drain.partial_cmp(&a.drain).unwrap_or(std::cmp::Ordering::Equal));
+        v
+    }
+
+    /// Arm a kill of the selected Firefox content process (pending y/n).
+    /// Firefox shows a recoverable "tab crashed" placeholder for the lost tab.
+    fn arm_kill_firefox(&mut self, hard: bool) {
+        let pick = self.firefox_procs().get(self.selected).map(|d| (d.pid, d.comm.clone()));
+        if let Some((pid, comm)) = pick {
+            self.pending_kill = Some((pid, hard, comm));
+        }
     }
 
     /// Arm a kill of the selected orphan's holder, pending y/n confirm.
@@ -644,6 +669,59 @@ fn render_orphans(pane: &mut Pane, app: &App, _rows: usize) {
     pane.refresh();
 }
 
+/// Firefox Fission content + helper process comms (kernel-truncated to 15).
+/// Each "Isolated Web Co" / "Web Content" is a tab/site renderer.
+const FIREFOX_CONTENT: &[&str] = &[
+    "Isolated Web Co",
+    "Web Content",
+    "Privileged Cont",
+    "Socket Process",
+    "RDD Process",
+    "Utility Process",
+    "WebExtensions",
+    "GPU Process",
+];
+
+fn is_firefox_content(comm: &str) -> bool {
+    FIREFOX_CONTENT.iter().any(|p| comm == *p)
+}
+
+fn render_firefox(pane: &mut Pane, app: &App, _rows: usize) {
+    let procs = app.firefox_procs();
+    let mut out = String::new();
+    out.push_str(&format!(
+        "\x1b[1;38;5;250m  Firefox content processes ({})  \u{2014}  k kill \u{00b7} Esc back\x1b[0m\n",
+        procs.len()
+    ));
+    out.push_str("\x1b[2m  Each Isolated/Web Content row is a tab or site (Fission). Kill the\n");
+    out.push_str("  rogue one with k \u{2014} Firefox shows a recoverable \"tab crashed\".\n");
+    out.push_str("  For tab titles, see Firefox's about:processes.\x1b[0m\n\n");
+    let header = format!(
+        " {:>8}  {:<18}  {:>6}  {:>8}  {:>8}  {:>5}",
+        "PID", "PROC", "CPU%", "WAKE/s", "NVOL/s", "DRAIN"
+    );
+    out.push_str(&format!("\x1b[1;38;5;250m{}\x1b[0m\n", header));
+    if procs.is_empty() {
+        out.push_str("\n  No Firefox content processes in the current sample.\n");
+    }
+    for (i, d) in procs.iter().enumerate() {
+        let col = drain_color(d.drain);
+        let line = format!(
+            " {:>8}  {:<18}  {:>6.1}  {:>8.1}  {:>8.1}  \x1b[38;5;{}m{:>5}\x1b[0m",
+            d.pid, comm_short(&d.comm, 18), d.cpu_pct, d.wakes_per_s, d.nvol_per_s, col, dots(d.drain)
+        );
+        let line = if i == app.selected {
+            format!("\x1b[48;5;238m{}\x1b[0m", line)
+        } else {
+            line
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    pane.set_text(out.trim_end_matches('\n'));
+    pane.refresh();
+}
+
 fn render_analysis(pane: &mut Pane, app: &App) {
     let header = "\x1b[1;38;5;250m─── analysis ───\x1b[0m";
     let mut body = String::new();
@@ -716,9 +794,12 @@ fn keys_line(app: &App) -> String {
     if app.mode == Mode::Orphans {
         return " ↑↓ select · k SIGTERM · K SIGKILL · a allowlist · O rescan · Esc back".to_string();
     }
+    if app.mode == Mode::Firefox {
+        return " ↑↓ select · k kill tab · K SIGKILL · Esc back".to_string();
+    }
     if app.show_help {
         format!(
-            " q quit · ↑↓ sel · Enter threads · S strace · O orphans · s sort ({}) · d diff · / filter · +/- Δt · p pause · c claude · C-y copy · r reset · h hide help",
+            " q quit · ↑↓ sel · Enter threads (firefox-bin→tabs) · S strace · O orphans · s sort ({}) · d diff · / filter · +/- Δt · p pause · c claude · C-y copy · r reset · h hide help",
             app.sort.label()
         )
     } else {
@@ -896,6 +977,7 @@ fn main() {
         match app.mode {
             Mode::Threads(_) => render_threads(&mut table, &app, layout.body_h as usize),
             Mode::Orphans => render_orphans(&mut table, &app, layout.body_h as usize),
+            Mode::Firefox => render_firefox(&mut table, &app, layout.body_h as usize),
             _ => render_table(&mut table, &app, layout.body_h as usize),
         }
         render_analysis(&mut analysis, &app);
@@ -971,6 +1053,7 @@ fn main() {
                         .map(|t| t.deltas.len())
                         .unwrap_or(0),
                     Mode::Orphans => app.orphans.len(),
+                    Mode::Firefox => app.firefox_procs().len(),
                     _ => app.filtered().len(),
                 };
                 if app.selected + 1 < n_visible {
@@ -980,13 +1063,21 @@ fn main() {
             Some("ENTER") => {
                 if app.mode == Mode::Table {
                     if let Some(d) = app.filtered().get(app.selected).copied() {
+                        let is_ff = d.comm == "firefox-bin";
                         let pid = d.pid;
-                        app.open_threads(pid);
+                        if is_ff {
+                            // ENTER on the Firefox parent → its per-tab content
+                            // processes (the draining tabs), not threads.
+                            app.mode = Mode::Firefox;
+                            app.selected = 0;
+                        } else {
+                            app.open_threads(pid);
+                        }
                     }
                 }
             }
             Some("ESC") => {
-                if matches!(app.mode, Mode::Threads(_) | Mode::StraceView | Mode::Orphans) {
+                if matches!(app.mode, Mode::Threads(_) | Mode::StraceView | Mode::Orphans | Mode::Firefox) {
                     app.close_overlay();
                 }
             }
@@ -1010,6 +1101,8 @@ fn main() {
             Some("k") if app.mode == Mode::Orphans => app.arm_kill(false),
             Some("K") if app.mode == Mode::Orphans => app.arm_kill(true),
             Some("a") if app.mode == Mode::Orphans => app.allowlist_selected(),
+            Some("k") if app.mode == Mode::Firefox => app.arm_kill_firefox(false),
+            Some("K") if app.mode == Mode::Firefox => app.arm_kill_firefox(true),
             Some("s") => {
                 app.sort = app.sort.next();
                 app.sort_deltas();

@@ -68,6 +68,11 @@ the wakeups it causes the whole CPU package to do.
   `a` adds it to a persisted allowlist. Scanned on a slow 30 s cadence
   (skipped while paused) — two short subprocesses + two stat reads, no
   polling loop. (`drain --orphans` prints a headless scan.)
+- **Firefox tab view** (`Enter` on a `firefox-bin` row) — lists Firefox's
+  Fission content processes (each `Isolated Web Content` / `Web Content`
+  is a tab or site) sorted by drain, so the rogue tab floats to the top.
+  `k` / `K` kill the selected one (Firefox shows a recoverable "tab
+  crashed"). For tab titles, see Firefox's `about:processes`.
 - **claude analysis pane** — `claude -p` runs at startup and on `c`
   with the top drainers as prompt; suggests likely polling-loop
   candidates. `Ctrl+Y` copies the analysis to your clipboard via
@@ -101,9 +106,10 @@ strace mode, or set `kernel.yama.ptrace_scope = 0` for your session.
 | `Enter` | expand selected pid into per-thread view |
 | `S` | attach `strace -c` to selected pid for 3s |
 | `O` | open / rescan the orphan (held-resource) view |
-| `k` / `K` | in orphan view: SIGTERM / SIGKILL the holder (y/n confirm) |
+| `k` / `K` | in orphan/Firefox view: SIGTERM / SIGKILL the selected (y/n confirm) |
 | `a` | in orphan view: allowlist the selected holder (persisted) |
-| `Esc` | close threads / strace / orphan overlay |
+| `Enter` | per-thread view — or, on a `firefox-bin` row, the Firefox tab view |
+| `Esc` | close threads / strace / orphan / Firefox overlay |
 | `s` | cycle sort: drain → cpu → wakes → io → drain |
 | `d` | toggle diff mode (highlight anomalies vs baseline) |
 | `/` | enter filter; type substring; `Enter` apply, `Esc` cancel |
