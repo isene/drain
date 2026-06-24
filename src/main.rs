@@ -63,8 +63,6 @@ enum Mode {
     FilterEdit,
     /// Per-thread breakdown for one pid.
     Threads(u32),
-    /// Strace histogram. The strace handle is in App.strace_slot.
-    StraceView,
     /// Orphan / held-resource list (held audio sink, idle-inhibitor,
     /// wifi power_save off, kernel wakelock). Selectable; k/K signal,
     /// a allowlists.
@@ -1077,7 +1075,7 @@ fn main() {
                 }
             }
             Some("ESC") => {
-                if matches!(app.mode, Mode::Threads(_) | Mode::StraceView | Mode::Orphans | Mode::Firefox) {
+                if matches!(app.mode, Mode::Threads(_) | Mode::Orphans | Mode::Firefox) {
                     app.close_overlay();
                 }
             }
