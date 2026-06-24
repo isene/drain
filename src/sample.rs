@@ -24,6 +24,7 @@ pub struct Delta {
     pub comm: String,
     #[allow(dead_code)]
     pub state: char,
+    #[allow(dead_code)]
     pub ppid: u32,
     pub cpu_pct: f64,      // (utime + stime) per second / nproc / clock_tps * 100
     pub wakes_per_s: f64,  // voluntary_ctxt_switches/s — polling proxy

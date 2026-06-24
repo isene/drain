@@ -24,6 +24,7 @@ pub struct StraceResult {
 #[derive(Clone, Debug)]
 pub struct StraceRow {
     pub pct_time: f64,
+    #[allow(dead_code)]
     pub seconds: f64,
     pub calls: u64,
     pub errors: u64,
