@@ -73,7 +73,7 @@ the wakeups it causes the whole CPU package to do.
   is a tab or site) sorted by drain, so the rogue tab floats to the top.
   `k` / `K` kill the selected one (Firefox shows a recoverable "tab
   crashed"). For tab titles, see Firefox's `about:processes`.
-- **claude analysis pane** — `claude -p` runs at startup and on `c`
+- **claude analysis pane** — `claude -p` runs at startup and on `I`
   with the top drainers as prompt; suggests likely polling-loop
   candidates. `Ctrl+Y` copies the analysis to your clipboard via
   OSC 52 (no `xclip` fork)
@@ -115,7 +115,7 @@ strace mode, or set `kernel.yama.ptrace_scope = 0` for your session.
 | `/` | enter filter; type substring; `Enter` apply, `Esc` cancel |
 | `+` / `-` | refresh interval ±0.5s (range 0.5s … 10s) |
 | `p` / `f` | pause / unpause sampling |
-| `c` | re-query claude analysis |
+| `I` | re-query claude analysis |
 | `Ctrl+Y` | copy claude analysis to clipboard (OSC 52) |
 | `r` | reset rolling-average bat watt readout |
 | `h` / `?` | toggle help line in footer |
@@ -159,7 +159,7 @@ strace mode, or set `kernel.yama.ptrace_scope = 0` for your session.
                                                                                     The asm tools are quiet; the
                                                                                     suite is behaving.
                                                                                     
- q · ↑↓ · Enter · S · s · d · / · +/- · p · c · C-y · r · h help                                drain v0.1.3
+ q · ↑↓ · Enter · S · s · d · / · +/- · p · I · C-y · r · h help                                drain v0.1.3
 ```
 
 ## Drain score
@@ -197,7 +197,7 @@ weight on wakes hits both with the right severity.
   — common on minimal WMs that don't publish per-window desktop info.
 - `strace -c` needs ptrace permission. See Install notes above.
 - claude pane needs the [`claude` CLI](https://docs.claude.com/claude-code/)
-  in `$PATH`. Without it, `c` and the initial query show an error
+  in `$PATH`. Without it, `I` and the initial query show an error
   in the analysis pane; everything else still works.
 - Sub-second polling loops between samples are still visible (they
   show up as elevated wakes/s) but `drain` itself only refreshes
