@@ -797,7 +797,7 @@ fn keys_line(app: &App) -> String {
     }
     if app.show_help {
         format!(
-            " q quit · ↑↓ sel · Enter threads (firefox-bin→tabs) · S strace · O orphans · s sort ({}) · d diff · / filter · +/- Δt · p pause · c claude · C-y copy · r reset · h hide help",
+            " q quit · ↑↓ sel · Enter threads (firefox-bin→tabs) · S strace · O orphans · s sort ({}) · d diff · / filter · +/- Δt · p pause · I claude · C-y copy · r reset · h hide help",
             app.sort.label()
         )
     } else {
@@ -1131,7 +1131,7 @@ fn main() {
                     Some((format!("interval Δt = {:.1}s", app.interval_secs), Instant::now()));
             }
             Some("p") | Some("P") | Some("f") | Some("F") => app.paused = !app.paused,
-            Some("c") | Some("C") => {
+            Some("I") => { // Fe2O3-standard: one-shot claude -p ask
                 spawn_claude_query(Arc::clone(&app.claude_text), app.top_summary(8), app.bat_avg.avg());
             }
             Some("C-y") | Some("C-Y") => {
