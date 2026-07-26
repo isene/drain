@@ -3,15 +3,11 @@
 //! it (vtp_osc52 path); same protocol as kitty / foot / alacritty /
 //! xterm-with-allowWindowOps.
 
-use std::io::Write;
 
 const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn copy(text: &str) {
-    let payload = b64_encode(text.as_bytes());
-    let mut out = std::io::stdout();
-    let _ = write!(out, "\x1b]52;c;{}\x07", payload);
-    let _ = out.flush();
+    crust::clipboard_copy(text, "clipboard");
 }
 
 fn b64_encode(data: &[u8]) -> String {

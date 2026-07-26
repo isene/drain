@@ -3,6 +3,7 @@
 //! table as a quick "is the suite behaving?" glance — the original
 //! use case drain was built for.
 
+use crust::style;
 use crate::sample::Delta;
 
 pub struct SuiteRow {
@@ -78,8 +79,8 @@ pub fn summarize(deltas: &[Delta]) -> Vec<SuiteRow> {
 ///    ≥ 1 w/s   green  (light activity)
 ///    < 1 w/s   dim    (idle — what we want)
 pub fn format_line(rows: &[SuiteRow], max_width: usize) -> String {
-    let bg = "\x1b[48;5;234m";
-    let reset = "\x1b[0m";
+    let bg = style::set_bg(234);
+    let reset = style::RESET;
     if rows.is_empty() {
         let body = "  suite: (no tracked asm tools running)";
         let pad_n = max_width.saturating_sub(body.chars().count());
@@ -105,12 +106,18 @@ pub fn format_line(rows: &[SuiteRow], max_width: usize) -> String {
                 244
             };
             format!(
-                "\x1b[38;5;{};48;5;234m{}{} {:.1}w/s\x1b[0m{}",
-                col, r.name, inst, r.wakes_per_s, bg
+                "{}{}",
+                style::styled(
+                    &format!("{}{} {:.1}w/s", r.name, inst, r.wakes_per_s),
+                    Some(col),
+                    Some(234),
+                    ""
+                ),
+                bg
             )
         })
         .collect();
-    parts.insert(0, format!("\x1b[38;5;250;48;5;234msuite:\x1b[0m{}", bg));
+    parts.insert(0, format!("{}{}", style::styled("suite:", Some(250), Some(234), ""), bg));
     let body = format!("  {}", parts.join("  "));
     // Compute visible width so we can truncate-with-ellipsis when the
     // line exceeds the pane. Visible-width calc strips ANSI.

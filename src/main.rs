@@ -15,6 +15,7 @@ mod suite;
 mod threads;
 mod winmap;
 
+use crust::style;
 use baseline::BaselineSnapshot;
 use crust::{Crust, Input, Pane};
 use sample::{Delta, Snap};
@@ -427,7 +428,7 @@ fn comm_short(comm: &str, max: usize) -> String {
 fn render_header(pane: &mut Pane, app: &App, cols: u16) {
     let bat = sample::battery();
     let mut line = String::new();
-    line.push_str(" \x1b[1mdrain\x1b[0m  ");
+    line.push_str(&format!(" {}  ", style::bold("drain")));
     if let Some((w, hours, st)) = bat {
         let col = bat_color(w);
         let arrow = match st {
@@ -436,7 +437,7 @@ fn render_header(pane: &mut Pane, app: &App, cols: u16) {
             'F' => "✓",
             _ => "·",
         };
-        line.push_str(&format!("Bat \x1b[38;5;{}m{:.2} W\x1b[0m {}", col, w, arrow));
+        line.push_str(&format!("Bat {} {}", style::styled(&format!("{w:.2} W"), Some(col as u8), None, ""), arrow));
         if let Some(avg) = app.bat_avg.avg() {
             let delta = w - avg;
             let sign = if delta >= 0.0 { "+" } else { "" };
@@ -483,12 +484,12 @@ fn render_header(pane: &mut Pane, app: &App, cols: u16) {
     if app.last_orphan_scan.is_some() {
         let n = app.orphan_count();
         let col = if n == 0 { 46 } else if n <= 2 { 226 } else { 196 };
-        line.push_str(&format!("    orphans:\x1b[38;5;{}m{}\x1b[0m", col, n));
+        line.push_str(&format!("    orphans:{}", style::styled(&n.to_string(), Some(col as u8), None, "")));
     }
     if !tags.is_empty() {
         line.push_str(&format!(
-            "    \x1b[1;38;5;226m[{}]\x1b[0m",
-            tags.join(" ")
+            "    {}",
+            style::styled(&format!("[{}]", tags.join(" ")), Some(226), None, "b")
         ));
     }
     pad_to(&mut line, cols as usize);
@@ -505,11 +506,18 @@ fn render_suite(pane: &mut Pane, app: &App, cols: u16) {
 
 fn render_table(pane: &mut Pane, app: &App, rows: usize) {
     let header = format!(
-        " {:>8}  {:<20}  {:>2}  \x1b[48;5;235m {:>5} \x1b[0m  {:>8}  {:>8}  {:>8}  {:>5}",
-        "PID", "PROC", "WS", "CPU%", "WAKE/s", "NVOL/s", "IO kB/s", "DRAIN"
+        " {:>8}  {:<20}  {:>2}  {}  {:>8}  {:>8}  {:>8}  {:>5}",
+        "PID",
+        "PROC",
+        "WS",
+        style::styled(&format!(" {:>5} ", "CPU%"), None, Some(235), ""),
+        "WAKE/s",
+        "NVOL/s",
+        "IO kB/s",
+        "DRAIN"
     );
     let mut out = String::new();
-    out.push_str(&format!("\x1b[1;38;5;250m{}\x1b[0m\n", header));
+    out.push_str(&format!("{}\n", style::styled(&header, Some(250), None, "b")));
     let visible = app.filtered();
     let take = (rows.saturating_sub(2)).min(visible.len());
     for (i, d) in visible.iter().take(take).enumerate() {
@@ -520,33 +528,41 @@ fn render_table(pane: &mut Pane, app: &App, rows: usize) {
         // window or borrowed it from an ancestor.
         let ws = match app.resolve_ws(d.pid) {
             WsAttribution::Direct(n) => format!("{}", n + 1),
-            WsAttribution::Inherited(n) => format!("\x1b[2m{}~\x1b[0m", n + 1),
+            WsAttribution::Inherited(n) => style::dim(&format!("{}~", n + 1)),
             WsAttribution::Unknown => "?".to_string(),
             WsAttribution::None => "·".to_string(),
         };
         let comm = comm_short(&d.comm, 20);
         let dot_str = dots(d.drain);
-        let cpu_cell = format!("\x1b[48;5;235m {:>5.1} \x1b[0m", d.cpu_pct);
+        let cpu_cell = style::styled(&format!(" {:>5.1} ", d.cpu_pct), None, Some(235), "");
         // Diff badge: when the per-comm wakes ratio is significantly
         // above baseline, prepend a colored marker. 1.5x = mild, 3x =
         // strong, 5x = "definitely look at this".
         let badge = if app.diff_mode {
             match app.baseline.wakes_anomaly(&d.comm, d.wakes_per_s) {
-                Some(r) if r >= 5.0 => "\x1b[1;38;5;196m↑↑↑\x1b[0m".to_string(),
-                Some(r) if r >= 3.0 => "\x1b[1;38;5;208m↑↑ \x1b[0m".to_string(),
-                Some(r) if r >= 1.5 => "\x1b[1;38;5;226m↑  \x1b[0m".to_string(),
+                Some(r) if r >= 5.0 => style::styled("↑↑↑", Some(196), None, "b").to_string(),
+                Some(r) if r >= 3.0 => style::styled("↑↑ ", Some(208), None, "b").to_string(),
+                Some(r) if r >= 1.5 => style::styled("↑  ", Some(226), None, "b").to_string(),
                 _ => "   ".to_string(),
             }
         } else {
             "".to_string()
         };
         let line = format!(
-            "{} {:>8}  {}  {:>2}  {}  {:>8.1}  {:>8.1}  {:>8.1}  \x1b[38;5;{}m{:>5}\x1b[0m",
-            badge, d.pid, comm, ws, cpu_cell, d.wakes_per_s, d.nvol_per_s, d.io_kbs, col, dot_str
+            "{} {:>8}  {}  {:>2}  {}  {:>8.1}  {:>8.1}  {:>8.1}  {}",
+            badge,
+            d.pid,
+            comm,
+            ws,
+            cpu_cell,
+            d.wakes_per_s,
+            d.nvol_per_s,
+            d.io_kbs,
+            style::styled(&format!("{dot_str:>5}"), Some(col as u8), None, "")
         );
         // Highlight selected row with a distinct background.
         let line = if i == app.selected {
-            format!("\x1b[48;5;238m{}\x1b[0m", line)
+            style::styled(&line, None, Some(238), "")
         } else {
             line
         };
@@ -562,14 +578,19 @@ fn render_threads(pane: &mut Pane, app: &App, _rows: usize) {
         Some(t) => t,
         None => return,
     };
-    let header_pid = format!(
-        "\x1b[1;38;5;250m  Threads of pid {} ({})  —  Esc to go back\x1b[0m",
-        tv.pid,
-        app.deltas
-            .iter()
-            .find(|d| d.pid == tv.pid)
-            .map(|d| d.comm.clone())
-            .unwrap_or_default()
+    let header_pid = style::styled(
+        &format!(
+            "  Threads of pid {} ({})  —  Esc to go back",
+            tv.pid,
+            app.deltas
+                .iter()
+                .find(|d| d.pid == tv.pid)
+                .map(|d| d.comm.clone())
+                .unwrap_or_default()
+        ),
+        Some(250),
+        None,
+        "b"
     );
     let table_header = format!(
         " {:>8}  {:<20}  {:>5}  {:>9}",
@@ -578,7 +599,7 @@ fn render_threads(pane: &mut Pane, app: &App, _rows: usize) {
     let mut out = String::new();
     out.push_str(&header_pid);
     out.push_str("\n\n");
-    out.push_str(&format!("\x1b[1;38;5;250m{}\x1b[0m\n", table_header));
+    out.push_str(&format!("{}\n", style::styled(&table_header, Some(250), None, "b")));
     for (i, t) in tv.deltas.iter().take(40).enumerate() {
         let line = format!(
             " {:>8}  {:<20}  {:>5.1}  {:>9.1}",
@@ -588,7 +609,7 @@ fn render_threads(pane: &mut Pane, app: &App, _rows: usize) {
             t.wakes_per_s
         );
         let line = if i == app.selected {
-            format!("\x1b[48;5;238m{}\x1b[0m", line)
+            style::styled(&line, None, Some(238), "")
         } else {
             line
         };
@@ -617,15 +638,17 @@ fn render_orphans(pane: &mut Pane, app: &App, _rows: usize) {
         Some(t) => format!("scanned {} ago", fmt_held(t.elapsed())),
         None => "scanning…".to_string(),
     };
-    let head = format!(
-        "\x1b[1;38;5;250m  Orphans — held resources idling on power  ({})  —  Esc to go back\x1b[0m",
-        scanned
+    let head = style::styled(
+        &format!("  Orphans — held resources idling on power  ({scanned})  —  Esc to go back"),
+        Some(250),
+        None,
+        "b",
     );
     let mut out = String::new();
     out.push_str(&head);
     out.push_str("\n\n");
     if app.orphans.is_empty() {
-        out.push_str("  \x1b[38;5;46m✓ none — no resource held open while idle\x1b[0m\n");
+        out.push_str(&format!("  {}\n", style::fg("✓ none — no resource held open while idle", 46)));
         out.push_str("\n  Classes checked: audio sink (pactl), idle-inhibitor\n");
         out.push_str("  (systemd-inhibit), wifi power_save, kernel wakelock.\n");
         pane.set_text(out.trim_end_matches('\n'));
@@ -636,7 +659,7 @@ fn render_orphans(pane: &mut Pane, app: &App, _rows: usize) {
         " {:<9}  {:>7}  {:<18}  {:>6}  {:>6}  {}",
         "CLASS", "PID", "HOLDER", "HELD", "~mW", "DETAIL"
     );
-    out.push_str(&format!("\x1b[1;38;5;250m{}\x1b[0m\n", table_header));
+    out.push_str(&format!("{}\n", style::styled(&table_header, Some(250), None, "b")));
     for (i, o) in app.orphans.iter().enumerate() {
         let pid_s = if o.pid > 0 { o.pid.to_string() } else { "·".to_string() };
         let line = format!(
@@ -650,13 +673,13 @@ fn render_orphans(pane: &mut Pane, app: &App, _rows: usize) {
         );
         // Allowlisted holders render dim; otherwise color by est. cost.
         let line = if o.allowlisted {
-            format!("\x1b[2m{}  [allow]\x1b[0m", line)
+            style::dim(&format!("{line}  [allow]"))
         } else {
             let col = if o.estimated_mw >= 400 { 196 } else if o.estimated_mw >= 250 { 208 } else { 226 };
-            format!("\x1b[38;5;{}m{}\x1b[0m", col, line)
+            style::styled(&line, Some(col as u8), None, "")
         };
         let line = if i == app.selected {
-            format!("\x1b[48;5;238m{}\x1b[0m", line)
+            style::styled(&line, None, Some(238), "")
         } else {
             line
         };
@@ -688,28 +711,41 @@ fn render_firefox(pane: &mut Pane, app: &App, _rows: usize) {
     let procs = app.firefox_procs();
     let mut out = String::new();
     out.push_str(&format!(
-        "\x1b[1;38;5;250m  Firefox content processes ({})  \u{2014}  k kill \u{00b7} Esc back\x1b[0m\n",
-        procs.len()
+        "{}\n",
+        style::styled(
+            &format!(
+                "  Firefox content processes ({})  \u{2014}  k kill \u{00b7} Esc back",
+                procs.len()
+            ),
+            Some(250),
+            None,
+            "b"
+        )
     ));
-    out.push_str("\x1b[2m  Each Isolated/Web Content row is a tab or site (Fission). Kill the\n");
+    out.push_str(&style::dim("  Each Isolated/Web Content row is a tab or site (Fission). Kill the\n"));
     out.push_str("  rogue one with k \u{2014} Firefox shows a recoverable \"tab crashed\".\n");
-    out.push_str("  For tab titles, see Firefox's about:processes.\x1b[0m\n\n");
+    out.push_str(&style::dim("  For tab titles, see Firefox's about:processes.\n\n"));
     let header = format!(
         " {:>8}  {:<18}  {:>6}  {:>8}  {:>8}  {:>5}",
         "PID", "PROC", "CPU%", "WAKE/s", "NVOL/s", "DRAIN"
     );
-    out.push_str(&format!("\x1b[1;38;5;250m{}\x1b[0m\n", header));
+    out.push_str(&format!("{}\n", style::styled(&header, Some(250), None, "b")));
     if procs.is_empty() {
         out.push_str("\n  No Firefox content processes in the current sample.\n");
     }
     for (i, d) in procs.iter().enumerate() {
         let col = drain_color(d.drain);
         let line = format!(
-            " {:>8}  {:<18}  {:>6.1}  {:>8.1}  {:>8.1}  \x1b[38;5;{}m{:>5}\x1b[0m",
-            d.pid, comm_short(&d.comm, 18), d.cpu_pct, d.wakes_per_s, d.nvol_per_s, col, dots(d.drain)
+            " {:>8}  {:<18}  {:>6.1}  {:>8.1}  {:>8.1}  {}",
+            d.pid,
+            comm_short(&d.comm, 18),
+            d.cpu_pct,
+            d.wakes_per_s,
+            d.nvol_per_s,
+            style::styled(&format!("{:>5}", dots(d.drain)), Some(col as u8), None, "")
         );
         let line = if i == app.selected {
-            format!("\x1b[48;5;238m{}\x1b[0m", line)
+            style::styled(&line, None, Some(238), "")
         } else {
             line
         };
@@ -721,7 +757,7 @@ fn render_firefox(pane: &mut Pane, app: &App, _rows: usize) {
 }
 
 fn render_analysis(pane: &mut Pane, app: &App) {
-    let header = "\x1b[1;38;5;250m─── analysis ───\x1b[0m";
+    let header = style::styled("─── analysis ───", Some(250), None, "b");
     let mut body = String::new();
     let strace_active = {
         let s = app.strace_slot.lock().unwrap();
@@ -735,7 +771,7 @@ fn render_analysis(pane: &mut Pane, app: &App) {
             if s.running { "running…" } else { "done" }
         ));
         if let Some(e) = &s.error {
-            body.push_str(&format!("\x1b[38;5;196merror:\x1b[0m {}\n\n", e));
+            body.push_str(&format!("{} {}\n\n", style::fg("error:", 196), e));
         }
         if !s.rows.is_empty() {
             body.push_str(&format!(
@@ -759,16 +795,17 @@ fn render_analysis(pane: &mut Pane, app: &App) {
 
 fn render_footer(pane: &mut Pane, app: &App, cols: u16) {
     let left = if let Some((_, hard, cmd)) = &app.pending_kill {
-        format!(
-            " \x1b[1;38;5;208mSIG{} {}?  y / n\x1b[0m",
-            if *hard { "KILL" } else { "TERM" },
-            cmd
+        style::styled(
+            &format!(" SIG{} {}?  y / n", if *hard { "KILL" } else { "TERM" }, cmd),
+            Some(208),
+            None,
+            "b",
         )
     } else if app.mode == Mode::FilterEdit {
         format!(" /{}_  (Enter apply · Esc cancel)", app.filter_input)
     } else if let Some((msg, t)) = &app.flash {
         if t.elapsed().as_secs() < 3 {
-            format!(" \x1b[38;5;46m{}\x1b[0m", msg)
+            format!(" {}", style::fg(msg, 46))
         } else {
             keys_line(app)
         }
