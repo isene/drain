@@ -963,6 +963,26 @@ fn spawn_claude_query(claude_text: Arc<Mutex<String>>, summary: String, watts: O
 }
 
 fn main() {
+    // --help and --version answer before the TUI touches the terminal.
+    // A tool that asks what this is — the fe2o3 launcher's ? popup, a
+    // packaging script, a curious shell — should get an answer, not a
+    // screen paint.
+    if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
+        println!("drain — Battery-drain triage (Fe2O3 suite)");
+        println!();
+        println!("Usage: drain [--orphans]");
+        println!();
+        println!("  --orphans    list orphaned processes as text and exit");
+        println!();
+        println!("Top drainers by CPU%, voluntary context switches per second (the polling");
+        println!("proxy) and I/O, with per-workspace attribution and a persistent baseline.");
+        return;
+    }
+    if std::env::args().skip(1).any(|a| a == "-v" || a == "--version") {
+        println!("drain {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     // Headless orphan scan — verification / debugging without the TUI.
     if std::env::args().skip(1).any(|a| a == "--orphans") {
         let found = orphans::detect(&[], &HashMap::new());
