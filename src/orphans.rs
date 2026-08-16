@@ -138,18 +138,20 @@ fn detect_audio(out: &mut Vec<Orphan>) {
     let mut have_corked = false;
     let mut pid = 0u32;
     let mut name = String::new();
+    let mut media = String::new();
     let mut in_block = false;
     for line in text.lines() {
         let t = line.trim();
         if t.starts_with("Sink Input #") {
             if in_block {
-                audio_push(corked, have_corked, pid, &name, out);
+                audio_push(corked, have_corked, pid, &name, &media, out);
             }
             in_block = true;
             corked = false;
             have_corked = false;
             pid = 0;
             name = String::new();
+            media = String::new();
         } else if let Some(v) = t.strip_prefix("Corked:") {
             corked = v.trim() == "yes";
             have_corked = true;
@@ -157,14 +159,23 @@ fn detect_audio(out: &mut Vec<Orphan>) {
             pid = v.trim().trim_matches('"').parse().unwrap_or(0);
         } else if let Some(v) = t.strip_prefix("application.name = ") {
             name = v.trim().trim_matches('"').to_string();
+        } else if let Some(v) = t.strip_prefix("media.name = ") {
+            media = v.trim().trim_matches('"').to_string();
         }
     }
     if in_block {
-        audio_push(corked, have_corked, pid, &name, out);
+        audio_push(corked, have_corked, pid, &name, &media, out);
     }
 }
 
-fn audio_push(corked: bool, have_corked: bool, pid: u32, name: &str, out: &mut Vec<Orphan>) {
+fn audio_push(
+    corked: bool,
+    have_corked: bool,
+    pid: u32,
+    name: &str,
+    media: &str,
+    out: &mut Vec<Orphan>,
+) {
     if have_corked && !corked {
         let cmd = if !name.is_empty() {
             name.to_string()
@@ -173,12 +184,14 @@ fn audio_push(corked: bool, have_corked: bool, pid: u32, name: &str, out: &mut V
         } else {
             "audio stream".to_string()
         };
-        out.push(Orphan::new(
-            OrphanClass::Audio,
-            pid,
-            cmd,
-            "holding sink active (not corked)".to_string(),
-        ));
+        // media.name is the stream title — for Firefox that's the tab, which
+        // is what the user actually needs to go close.
+        let detail = if media.is_empty() {
+            "holding sink active (not corked)".to_string()
+        } else {
+            format!("holding sink active: {}", media)
+        };
+        out.push(Orphan::new(OrphanClass::Audio, pid, cmd, detail));
     }
 }
 
