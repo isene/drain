@@ -118,6 +118,12 @@ struct App {
     last_orphan_scan: Option<Instant>,
     /// Armed kill awaiting y/n confirmation: (pid, hard, cmd).
     pending_kill: Option<(u32, bool, String)>,
+    /// Firefox content pid -> the site it renders, from `ff-origins`. With
+    /// Fission every tab is its own process but they all share the comm
+    /// "Isolated Web Co", so without this the rows cannot be told apart.
+    /// Filled on entering the Firefox view and on r; never on the tick, since
+    /// it signals Firefox and reads a ~250 KB dump.
+    ff_origins: HashMap<u32, String>,
 }
 
 struct BatRing {
@@ -180,6 +186,7 @@ impl App {
             orphans: Vec::new(),
             last_orphan_scan: None,
             pending_kill: None,
+            ff_origins: HashMap::new(),
         }
     }
 
@@ -342,6 +349,36 @@ impl App {
             .collect();
         v.sort_by(|a, b| b.drain.partial_cmp(&a.drain).unwrap_or(std::cmp::Ordering::Equal));
         v
+    }
+
+    /// Ask `ff-origins` which site each Firefox content process renders.
+    /// One fork, only on demand: it signals Firefox to dump its about:memory
+    /// report, so it has no business running on the sample tick.
+    fn load_ff_origins(&mut self) {
+        let out = Command::new("ff-origins")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        let Ok(out) = out else {
+            self.flash = Some(("ff-origins not found".into(), Instant::now()));
+            return;
+        };
+        self.ff_origins.clear();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some((pid, site)) = line.split_once('\t') {
+                if let Ok(pid) = pid.trim().parse::<u32>() {
+                    self.ff_origins.insert(pid, site.to_string());
+                }
+            }
+        }
+    }
+
+    /// The site for a content pid, falling back to its comm.
+    fn ff_label(&self, d: &Delta) -> String {
+        match self.ff_origins.get(&d.pid) {
+            Some(site) => site.clone(),
+            None => d.comm.clone(),
+        }
     }
 
     /// Arm a kill of the selected Firefox content process (pending y/n).
@@ -714,7 +751,7 @@ fn render_firefox(pane: &mut Pane, app: &App, _rows: usize) {
         "{}\n",
         style::styled(
             &format!(
-                "  Firefox content processes ({})  \u{2014}  k kill \u{00b7} Esc back",
+                "  Firefox content processes ({})  \u{2014}  k kill \u{00b7} r refresh sites \u{00b7} Esc back",
                 procs.len()
             ),
             Some(250),
@@ -722,12 +759,12 @@ fn render_firefox(pane: &mut Pane, app: &App, _rows: usize) {
             "b"
         )
     ));
-    out.push_str(&style::dim("  Each Isolated/Web Content row is a tab or site (Fission). Kill the\n"));
-    out.push_str("  rogue one with k \u{2014} Firefox shows a recoverable \"tab crashed\".\n");
-    out.push_str(&style::dim("  For tab titles, see Firefox's about:processes.\n\n"));
+    out.push_str(&style::dim("  Each row is a tab or site (Fission). Kill the rogue one with k \u{2014}\n"));
+    out.push_str("  Firefox shows a recoverable \"tab crashed\" placeholder.\n");
+    out.push_str(&style::dim("  Sites come from ff-origins; r re-reads them after opening tabs.\n\n"));
     let header = format!(
-        " {:>8}  {:<18}  {:>6}  {:>8}  {:>8}  {:>5}",
-        "PID", "PROC", "CPU%", "WAKE/s", "NVOL/s", "DRAIN"
+        " {:>8}  {:<28}  {:>6}  {:>8}  {:>8}  {:>5}",
+        "PID", "SITE", "CPU%", "WAKE/s", "NVOL/s", "DRAIN"
     );
     out.push_str(&format!("{}\n", style::styled(&header, Some(250), None, "b")));
     if procs.is_empty() {
@@ -736,9 +773,9 @@ fn render_firefox(pane: &mut Pane, app: &App, _rows: usize) {
     for (i, d) in procs.iter().enumerate() {
         let col = drain_color(d.drain);
         let line = format!(
-            " {:>8}  {:<18}  {:>6.1}  {:>8.1}  {:>8.1}  {}",
+            " {:>8}  {:<28}  {:>6.1}  {:>8.1}  {:>8.1}  {}",
             d.pid,
-            comm_short(&d.comm, 18),
+            comm_short(&app.ff_label(d), 28),
             d.cpu_pct,
             d.wakes_per_s,
             d.nvol_per_s,
@@ -1125,6 +1162,7 @@ fn main() {
                             // processes (the draining tabs), not threads.
                             app.mode = Mode::Firefox;
                             app.selected = 0;
+                            app.load_ff_origins();
                         } else {
                             app.open_threads(pid);
                         }
@@ -1158,6 +1196,7 @@ fn main() {
             Some("a") if app.mode == Mode::Orphans => app.allowlist_selected(),
             Some("k") if app.mode == Mode::Firefox => app.arm_kill_firefox(false),
             Some("K") if app.mode == Mode::Firefox => app.arm_kill_firefox(true),
+            Some("r") if app.mode == Mode::Firefox => app.load_ff_origins(),
             Some("s") => {
                 app.sort = app.sort.next();
                 app.sort_deltas();
