@@ -10,6 +10,7 @@ mod baseline;
 mod clipboard;
 mod orphans;
 mod sample;
+mod ledger;
 mod strace;
 mod suite;
 mod threads;
@@ -68,6 +69,8 @@ enum Mode {
     /// wifi power_save off, kernel wakelock). Selectable; k/K signal,
     /// a allowlists.
     Orphans,
+    /// Battery ledger: watt-hours and CPU-seconds per app per day.
+    Ledger,
     /// Firefox content/helper processes (the per-tab Fission renderers),
     /// opened with ENTER on firefox-bin. Selectable; k/K kill the tab.
     Firefox,
@@ -124,6 +127,11 @@ struct App {
     /// Filled on entering the Firefox view and on r; never on the tick, since
     /// it signals Firefox and reads a ~250 KB dump.
     ff_origins: HashMap<u32, String>,
+    /// Session accounting for the battery ledger; appended to
+    /// ~/.drain/ledger.tsv on quit.
+    ledger: ledger::Ledger,
+    /// Aggregated ledger report, computed when the view opens.
+    ledger_report: Option<ledger::Report>,
 }
 
 struct BatRing {
@@ -187,6 +195,8 @@ impl App {
             last_orphan_scan: None,
             pending_kill: None,
             ff_origins: HashMap::new(),
+            ledger: ledger::Ledger::new(today_iso()),
+            ledger_report: None,
         }
     }
 
@@ -210,6 +220,16 @@ impl App {
         if let Some((w, _, _)) = bat {
             self.bat_avg.push(w);
         }
+        // Ledger accounting: charge each process its CPU share of the
+        // interval; integrate Wh only while actually discharging.
+        let watts = bat.and_then(|(w, _, st)| if st == 'D' { Some(w) } else { None });
+        let procs: Vec<(String, f64)> = self
+            .deltas
+            .iter()
+            .filter(|d| d.cpu_pct > 0.1)
+            .map(|d| (d.comm.clone(), d.cpu_pct))
+            .collect();
+        self.ledger.tick(elapsed, watts, &procs);
         // Update persistent baseline only on samples where the system
         // is genuinely "idle-ish" (no mass spike). EWMA inside the
         // baseline does the smoothing; we just feed every sample.
@@ -793,6 +813,38 @@ fn render_firefox(pane: &mut Pane, app: &App, _rows: usize) {
     pane.refresh();
 }
 
+fn render_ledger(pane: &mut Pane, app: &App) {
+    let mut out = String::new();
+    out.push_str(&style::styled(
+        "  Battery ledger — covers only time drain was open  —  Esc to go back",
+        Some(250), None, "b"));
+    out.push_str("\n\n");
+    if let Some(r) = &app.ledger_report {
+        out.push_str(&format!(
+            "  Last {} day(s) on record: {:.1} Wh measured while discharging\n",
+            r.days, r.total_wh));
+        out.push_str(&format!(
+            "  This session so far: {:.2} Wh\n\n", app.ledger.wh));
+        let hdr = format!("  {:<22} {:>10} {:>8} {:>6}",
+                          "COMM", "CPU s", "~Wh", "share");
+        out.push_str(&format!("{}\n", style::styled(&hdr, Some(250), None, "b")));
+        let total: f64 = r.rows.iter().map(|(_, s, _)| s).sum();
+        for (comm, secs, wh) in r.rows.iter().take(30) {
+            let share = if total > 0.0 { secs / total * 100.0 } else { 0.0 };
+            out.push_str(&format!(
+                "  {:<22} {:>10.1} {:>8.2} {:>5.1}%\n",
+                comm_short(comm, 22), secs, wh, share));
+        }
+        if r.rows.is_empty() {
+            out.push_str("  nothing on record yet — quit drain once to write the first session\n");
+        }
+        out.push_str(&style::dim(
+            "\n  ~Wh apportions each day's measured Wh by CPU share: an estimate.\n"));
+    }
+    pane.set_text(out.trim_end_matches('\n'));
+    pane.refresh();
+}
+
 fn render_analysis(pane: &mut Pane, app: &App) {
     let header = style::styled("─── analysis ───", Some(250), None, "b");
     let mut body = String::new();
@@ -866,12 +918,15 @@ fn keys_line(app: &App) -> String {
     if app.mode == Mode::Orphans {
         return " ↑↓ select · k SIGTERM · K SIGKILL · a allowlist · O rescan · Esc back".to_string();
     }
+    if app.mode == Mode::Ledger {
+        return " Esc back".to_string();
+    }
     if app.mode == Mode::Firefox {
         return " ↑↓ select · k kill tab · K SIGKILL · Esc back".to_string();
     }
     if app.show_help {
         format!(
-            " q quit · ↑↓ sel · Enter threads (firefox-bin→tabs) · S strace · O orphans · s sort ({}) · d diff · / filter · +/- Δt · p pause · I claude · C-y copy · r reset · h hide help",
+            " q quit · ↑↓ sel · Enter threads (firefox-bin→tabs) · S strace · O orphans · L ledger · s sort ({}) · d diff · / filter · +/- Δt · p pause · I claude · C-y copy · r reset · h hide help",
             app.sort.label()
         )
     } else {
@@ -1007,9 +1062,10 @@ fn main() {
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
         println!("drain — Battery-drain triage (Fe2O3 suite)");
         println!();
-        println!("Usage: drain [--orphans]");
+        println!("Usage: drain [--orphans | --ledger]");
         println!();
         println!("  --orphans    list orphaned processes as text and exit");
+        println!("  --ledger     battery ledger (Wh per app per day) and exit");
         println!();
         println!("Top drainers by CPU%, voluntary context switches per second (the polling");
         println!("proxy) and I/O, with per-workspace attribution and a persistent baseline.");
@@ -1017,6 +1073,20 @@ fn main() {
     }
     if std::env::args().skip(1).any(|a| a == "-v" || a == "--version") {
         println!("drain {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    // Headless ledger report.
+    if std::env::args().skip(1).any(|a| a == "--ledger") {
+        let r = ledger::report(7);
+        println!("Battery ledger — last {} day(s), only time drain was open",
+                 r.days);
+        println!("{:.1} Wh measured while discharging", r.total_wh);
+        let total: f64 = r.rows.iter().map(|(_, s, _)| s).sum();
+        for (comm, secs, wh) in r.rows.iter().take(30) {
+            let share = if total > 0.0 { secs / total * 100.0 } else { 0.0 };
+            println!("{:<22} {:>10.1}s {:>7.2}Wh {:>5.1}%", comm, secs, wh, share);
+        }
         return;
     }
 
@@ -1069,6 +1139,7 @@ fn main() {
         match app.mode {
             Mode::Threads(_) => render_threads(&mut table, &app, layout.body_h as usize),
             Mode::Orphans => render_orphans(&mut table, &app, layout.body_h as usize),
+            Mode::Ledger => render_ledger(&mut table, &app),
             Mode::Firefox => render_firefox(&mut table, &app, layout.body_h as usize),
             _ => render_table(&mut table, &app, layout.body_h as usize),
         }
@@ -1170,9 +1241,14 @@ fn main() {
                 }
             }
             Some("ESC") => {
-                if matches!(app.mode, Mode::Threads(_) | Mode::Orphans | Mode::Firefox) {
+                if matches!(app.mode, Mode::Threads(_) | Mode::Orphans
+                            | Mode::Firefox | Mode::Ledger) {
                     app.close_overlay();
                 }
+            }
+            Some("L") => {
+                app.ledger_report = Some(ledger::report(7));
+                app.mode = Mode::Ledger;
             }
             Some("S") => {
                 if app.mode == Mode::Table {
@@ -1264,6 +1340,7 @@ fn main() {
     // Save baseline + bat ring on quit so the next session starts
     // with context. Best-effort — ignore failures.
     baseline::save(&app.baseline);
+    app.ledger.save();
     Crust::cleanup();
 }
 
