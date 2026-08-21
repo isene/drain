@@ -205,10 +205,28 @@ weight on wakes hits both with the right severity.
   appears in its own table — pressing `+` to slow the refresh
   drops drain's own footprint visibly.
 
+## The battery ledger
+
+`L` in the TUI, or `drain --ledger`, shows watt-hours and CPU-seconds per
+app per day. The TUI can only account for time it is open, so start the
+tally once and the days fill in on their own:
+
+```sh
+drain --tally &          # or from your WM's autostart
+```
+
+It blocks on the kernel's uevent socket and wakes only when the power
+supply reports a change, roughly once per percent plus each AC
+transition. No timer, no polling, no wakeups while idle. Energy comes
+from the battery's own counters, so the charge lost during a suspend is
+measured too. Up to 0.25 Wh is unwritten at any moment, which is what a
+kill costs you.
+
 ## Files
 
 ```
 ~/.cache/drain/state.json   persistent baseline (bat W avg + per-comm wakes/cpu medians)
+~/.drain/ledger.tsv         the ledger: <date> <comm|__wh__> <cpu_s|watt_hours>
 ```
 
 ## Related

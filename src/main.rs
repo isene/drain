@@ -12,6 +12,7 @@ mod orphans;
 mod sample;
 mod ledger;
 mod strace;
+mod tally;
 mod suite;
 mod threads;
 mod winmap;
@@ -816,7 +817,7 @@ fn render_firefox(pane: &mut Pane, app: &App, _rows: usize) {
 fn render_ledger(pane: &mut Pane, app: &App) {
     let mut out = String::new();
     out.push_str(&style::styled(
-        "  Battery ledger — covers only time drain was open  —  Esc to go back",
+        "  Battery ledger — Wh from the tally, apps from drain's own sessions  —  Esc to go back",
         Some(250), None, "b"));
     out.push_str("\n\n");
     if let Some(r) = &app.ledger_report {
@@ -1066,6 +1067,8 @@ fn main() {
         println!();
         println!("  --orphans    list orphaned processes as text and exit");
         println!("  --ledger     battery ledger (Wh per app per day) and exit");
+        println!("  --tally      accrue Wh into the ledger in the background,");
+        println!("               woken by power-supply events, never by a timer");
         println!();
         println!("Top drainers by CPU%, voluntary context switches per second (the polling");
         println!("proxy) and I/O, with per-workspace attribution and a persistent baseline.");
@@ -1076,10 +1079,17 @@ fn main() {
         return;
     }
 
+    // Battery tally: block on power-supply uevents and accrue watt-hours
+    // into the ledger. No timer, so an idle machine stays idle.
+    if std::env::args().skip(1).any(|a| a == "--tally") {
+        tally::run();
+        return;
+    }
+
     // Headless ledger report.
     if std::env::args().skip(1).any(|a| a == "--ledger") {
         let r = ledger::report(7);
-        println!("Battery ledger — last {} day(s), only time drain was open",
+        println!("Battery ledger — last {} day(s); run --tally to cover the rest",
                  r.days);
         println!("{:.1} Wh measured while discharging", r.total_wh);
         let total: f64 = r.rows.iter().map(|(_, s, _)| s).sum();
