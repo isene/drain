@@ -1,10 +1,17 @@
 //! Battery tally — watt-hours accrued while nothing else is watching.
 //!
 //! The ledger in drain can only account for time drain is open. This
-//! closes the gap without a timer: it blocks on the kernel's uevent
-//! socket and wakes only when the power supply actually reports a
-//! change, which is roughly once per percent plus each AC transition.
-//! Idle cost is one sleeping process in recvmsg, no wakeups at all.
+//! closes the gap without a timer of its own.
+//!
+//! It listens to upower, which every desktop already runs and which
+//! already samples the battery; its PropertiesChanged signal carries
+//! Energy in watt-hours. Reading that feed costs one blocking read on a
+//! pipe and adds no wakeups that were not happening anyway.
+//!
+//! Without upower it falls back to the kernel's uevent socket. That path
+//! is honest but thin: this laptop's ACPI battery emits no uevent on a
+//! capacity change (measured: none in seven minutes of discharge), so
+//! the fallback catches AC transitions and little else.
 //!
 //! Energy comes from the battery's own counters, so a suspend is
 //! measured too: the charge lost while asleep shows up in the first
@@ -144,20 +151,78 @@ pub fn run() {
         eprintln!("drain: no battery found");
         std::process::exit(1);
     };
+    if run_upower(&dir) {
+        return;
+    }
+    run_netlink(&dir)
+}
+
+/// Follow upower's battery signals. Each carries Energy in watt-hours,
+/// so a fall while discharging is drain, measured rather than derived.
+/// False means the feed never started, and the caller drops back to the
+/// kernel socket.
+fn run_upower(dir: &Path) -> bool {
+    use std::io::BufRead;
+    let child = std::process::Command::new("gdbus")
+        .args(["monitor", "--system", "--dest", "org.freedesktop.UPower"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else { return false };
+    let Some(out) = child.stdout.take() else { return false };
+    let mut last: Option<f64> = None;
+    let mut date = today();
+    let mut pending = 0.0f64;
+    let mut seen = false;
+    for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+        // The DisplayDevice repeats the same numbers; take the battery.
+        if !line.contains("battery_") || !line.contains("'Energy':") {
+            continue;
+        }
+        let Some(now) = field(&line, "'Energy': <") else { continue };
+        seen = true;
+        if let Some(before) = last {
+            if before > now && discharging(dir) {
+                pending += before - now;
+            }
+        }
+        last = Some(now);
+        let d = today();
+        if d != date {
+            append(&date, pending);
+            pending = 0.0;
+            date = d;
+        } else if pending >= FLUSH_WH {
+            append(&date, pending);
+            pending = 0.0;
+        }
+    }
+    append(&date, pending);
+    let _ = child.wait();
+    seen
+}
+
+/// The number after `key` in a gdbus line: `'Energy': <15.97>`.
+fn field(line: &str, key: &str) -> Option<f64> {
+    let rest = line.split(key).nth(1)?;
+    rest.split('>').next()?.trim().parse::<f64>().ok()
+}
+
+fn run_netlink(dir: &Path) {
     let Some(fd) = uevent_socket() else {
         eprintln!("drain: cannot open the uevent socket");
         std::process::exit(1);
     };
     let mut buf = vec![0u8; 4096];
-    let mut last = energy_wh(&dir);
+    let mut last = energy_wh(dir);
     let mut date = today();
     let mut pending = 0.0f64;
     while wait_power_event(fd, &mut buf) {
-        let now = energy_wh(&dir);
+        let now = energy_wh(dir);
         let (Some(a), Some(b)) = (last, now) else { last = now; continue };
         // Only a fall while on battery is drain. A rise is charging, and
         // a fall while plugged in is the pack settling, not consumption.
-        if discharging(&dir) && b < a {
+        if discharging(dir) && b < a {
             pending += a - b;
         }
         last = now;

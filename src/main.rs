@@ -1068,7 +1068,7 @@ fn main() {
         println!("  --orphans    list orphaned processes as text and exit");
         println!("  --ledger     battery ledger (Wh per app per day) and exit");
         println!("  --tally      accrue Wh into the ledger in the background,");
-        println!("               woken by power-supply events, never by a timer");
+        println!("               woken by upower's battery signal, never by a timer");
         println!();
         println!("Top drainers by CPU%, voluntary context switches per second (the polling");
         println!("proxy) and I/O, with per-workspace attribution and a persistent baseline.");

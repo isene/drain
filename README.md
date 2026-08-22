@@ -215,12 +215,17 @@ tally once and the days fill in on their own:
 drain --tally &          # or from your WM's autostart
 ```
 
-It blocks on the kernel's uevent socket and wakes only when the power
-supply reports a change, roughly once per percent plus each AC
-transition. No timer, no polling, no wakeups while idle. Energy comes
-from the battery's own counters, so the charge lost during a suspend is
-measured too. Up to 0.25 Wh is unwritten at any moment, which is what a
-kill costs you.
+It follows upower, which your desktop already runs and which already
+samples the battery. Its signal carries Energy in watt-hours, so the
+tally adds no timer of its own: one blocking read on a pipe, and no
+wakeups that were not happening anyway. Energy comes from the battery's
+counters, so the charge lost during a suspend is measured too. Up to
+0.25 Wh is unwritten at any moment, which is what a kill costs you.
+
+Without upower it falls back to the kernel's uevent socket. Be warned
+that the fallback is thin: an ACPI battery may emit no uevent at all on
+a capacity change (this laptop emits none in seven minutes of
+discharge), so it then catches AC transitions and little else.
 
 ## Files
 
