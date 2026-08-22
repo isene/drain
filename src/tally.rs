@@ -27,6 +27,13 @@ const NETLINK_KOBJECT_UEVENT: i32 = 15;
 /// Flush once this much has accrued: a few appends an hour, and at most
 /// this much is lost if the machine dies without a signal.
 const FLUSH_WH: f64 = 0.25;
+/// Above this draw the machine is doing something expensive, and it is
+/// worth one process sample to find out what. Below it, nothing extra
+/// happens at all. Override with DRAIN_PEAK_W.
+const PEAK_W: f64 = 6.0;
+/// Never sample more often than this, so a long expensive stretch costs
+/// a handful of samples rather than one per signal.
+const PEAK_GAP_S: u64 = 300;
 
 fn bat_dir() -> Option<PathBuf> {
     let rd = std::fs::read_dir("/sys/class/power_supply").ok()?;
@@ -174,6 +181,12 @@ fn run_upower(dir: &Path) -> bool {
     let mut date = today();
     let mut pending = 0.0f64;
     let mut seen = false;
+    let peak_w: f64 = std::env::var("DRAIN_PEAK_W").ok()
+        .and_then(|v| v.parse().ok()).unwrap_or(PEAK_W);
+    let mut last_peak = 0u64;
+    // PropertiesChanged carries only what changed, so a steady draw
+    // stops being repeated. Remember the last rate we were told.
+    let mut rate = 0.0f64;
     for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
         // The DisplayDevice repeats the same numbers; take the battery.
         if !line.contains("battery_") || !line.contains("'Energy':") {
@@ -181,6 +194,17 @@ fn run_upower(dir: &Path) -> bool {
         }
         let Some(now) = field(&line, "'Energy': <") else { continue };
         seen = true;
+        // Expensive right now: spend one sample on naming the cause.
+        if let Some(w) = field(&line, "'EnergyRate': <") {
+            rate = w;
+        }
+        let t = unix_now();
+        if rate >= peak_w && discharging(dir)
+            && t.saturating_sub(last_peak) >= PEAK_GAP_S
+        {
+            last_peak = t;
+            record_peak(&date, rate);
+        }
         if let Some(before) = last {
             if before > now && discharging(dir) {
                 pending += before - now;
@@ -200,6 +224,54 @@ fn run_upower(dir: &Path) -> bool {
     append(&date, pending);
     let _ = child.wait();
     seen
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// One second of process accounting, written where the ledger and the
+/// peaks file can use it. Runs only on an expensive wake, so the idle
+/// path never pays for it.
+fn record_peak(date: &str, watts: f64) {
+    let a = crate::sample::snapshot();
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let b = crate::sample::snapshot();
+    let mut d = crate::sample::deltas(&a, &b, 1.0, crate::sample::ncpus());
+    d.sort_by(|x, y| y.cpu_pct.partial_cmp(&x.cpu_pct)
+        .unwrap_or(std::cmp::Ordering::Equal));
+    let top: Vec<&crate::sample::Delta> =
+        d.iter().filter(|x| x.cpu_pct >= 0.1).take(5).collect();
+    if top.is_empty() {
+        return;
+    }
+    // CPU rows in the ledger's own format, so the per-app view has
+    // something to apportion the day's watt-hours by.
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let led = home.join(".drain").join("ledger.tsv");
+    if let Some(dir) = led.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&led) {
+        for x in &top {
+            let _ = writeln!(f, "{}\t{}\t{:.3}", date, x.comm, x.cpu_pct / 100.0);
+        }
+    }
+    // And the stretch itself: when it was expensive, how expensive, who
+    // was busy. This is the line that answers "what happened yesterday".
+    let names: Vec<String> = top.iter()
+        .map(|x| format!("{}:{:.0}%", x.comm, x.cpu_pct))
+        .collect();
+    let clock = std::process::Command::new("date").arg("+%Y-%m-%d %H:%M").output()
+        .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string()).unwrap_or_default();
+    let peaks = home.join(".drain").join("peaks.tsv");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&peaks) {
+        let _ = writeln!(f, "{}\t{:.1}\t{}", clock, watts, names.join(" "));
+    }
 }
 
 /// The number after `key` in a gdbus line: `'Energy': <15.97>`.

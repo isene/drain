@@ -222,6 +222,23 @@ wakeups that were not happening anyway. Energy comes from the battery's
 counters, so the charge lost during a suspend is measured too. Up to
 0.25 Wh is unwritten at any moment, which is what a kill costs you.
 
+When the draw crosses 6 W it also spends one second naming the cause:
+the top CPU consumers go into the ledger, and a line lands in
+`~/.drain/peaks.tsv` saying when it was expensive, how expensive, and
+who was busy. At most one such sample every five minutes, and none at
+all below the threshold, so an idle machine pays nothing. Set
+`DRAIN_PEAK_W` to move the line.
+
+```
+$ drain --ledger
+Expensive stretches (>= 6 W), newest first
+  2026-08-22 16:50  7.4  firefox:31% frame:3% claude:2%
+
+Battery ledger — last 2 day(s)
+41.2 Wh measured while discharging
+firefox                       0.0s   28.10Wh  68.2%
+```
+
 Without upower it falls back to the kernel's uevent socket. Be warned
 that the fallback is thin: an ACPI battery may emit no uevent at all on
 a capacity change (this laptop emits none in seven minutes of
@@ -232,6 +249,7 @@ discharge), so it then catches AC transitions and little else.
 ```
 ~/.cache/drain/state.json   persistent baseline (bat W avg + per-comm wakes/cpu medians)
 ~/.drain/ledger.tsv         the ledger: <date> <comm|__wh__> <cpu_s|watt_hours>
+~/.drain/peaks.tsv          expensive stretches: <when> <watts> <who was busy>
 ```
 
 ## Related

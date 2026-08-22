@@ -1088,6 +1088,21 @@ fn main() {
 
     // Headless ledger report.
     if std::env::args().skip(1).any(|a| a == "--ledger") {
+        // The expensive stretches first: when it cost, and who was busy.
+        let peaks = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .map(|h| h.join(".drain/peaks.tsv"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default();
+        let recent: Vec<&str> = peaks.lines().rev().take(10).collect();
+        if !recent.is_empty() {
+            let thr = std::env::var("DRAIN_PEAK_W").unwrap_or_else(|_| "6".into());
+            println!("Expensive stretches (>= {} W), newest first", thr);
+            for l in recent {
+                println!("  {}", l.replace('\t', "  "));
+            }
+            println!();
+        }
         let r = ledger::report(7);
         println!("Battery ledger — last {} day(s); run --tally to cover the rest",
                  r.days);
