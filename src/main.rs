@@ -133,6 +133,8 @@ struct App {
     ledger: ledger::Ledger,
     /// Aggregated ledger report, computed when the view opens.
     ledger_report: Option<ledger::Report>,
+    /// Expensive stretches, read when the ledger view opens.
+    ledger_peaks: Vec<String>,
 }
 
 struct BatRing {
@@ -198,6 +200,7 @@ impl App {
             ff_origins: HashMap::new(),
             ledger: ledger::Ledger::new(today_iso()),
             ledger_report: None,
+            ledger_peaks: Vec::new(),
         }
     }
 
@@ -819,13 +822,30 @@ fn render_ledger(pane: &mut Pane, app: &App) {
     out.push_str(&style::styled(
         "  Battery ledger — Wh from the tally, apps from drain's own sessions  —  Esc to go back",
         Some(250), None, "b"));
-    out.push_str("\n\n");
+    out.push('\n');
+    let (state, colour) = match tally::running_pid() {
+        Some(pid) => (format!("recording (tally pid {})", pid), 46),
+        None => ("not recording".to_string(), 208),
+    };
+    out.push_str(&format!("  {}   {}\n\n",
+        style::fg(&state, colour),
+        style::dim("t turns it on or off, and updates the ~/.tilerc autostart")));
     if let Some(r) = &app.ledger_report {
         out.push_str(&format!(
             "  Last {} day(s) on record: {:.1} Wh measured while discharging\n",
             r.days, r.total_wh));
         out.push_str(&format!(
             "  This session so far: {:.2} Wh\n\n", app.ledger.wh));
+        // What it cost is the top half of the answer; this is the rest.
+        if !app.ledger_peaks.is_empty() {
+            let thr = std::env::var("DRAIN_PEAK_W").unwrap_or_else(|_| "6".into());
+            let hdr = format!("  EXPENSIVE STRETCHES (>= {} W), newest first", thr);
+            out.push_str(&format!("{}\n", style::styled(&hdr, Some(250), None, "b")));
+            for l in &app.ledger_peaks {
+                out.push_str(&format!("  {}\n", l));
+            }
+            out.push('\n');
+        }
         let hdr = format!("  {:<22} {:>10} {:>8} {:>6}",
                           "COMM", "CPU s", "~Wh", "share");
         out.push_str(&format!("{}\n", style::styled(&hdr, Some(250), None, "b")));
@@ -1089,17 +1109,13 @@ fn main() {
     // Headless ledger report.
     if std::env::args().skip(1).any(|a| a == "--ledger") {
         // The expensive stretches first: when it cost, and who was busy.
-        let peaks = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .map(|h| h.join(".drain/peaks.tsv"))
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .unwrap_or_default();
-        let recent: Vec<&str> = peaks.lines().rev().take(10).collect();
+        // Same reader the TUI's L view uses.
+        let recent = ledger::peaks(10);
         if !recent.is_empty() {
             let thr = std::env::var("DRAIN_PEAK_W").unwrap_or_else(|_| "6".into());
             println!("Expensive stretches (>= {} W), newest first", thr);
-            for l in recent {
-                println!("  {}", l.replace('\t', "  "));
+            for l in &recent {
+                println!("  {}", l);
             }
             println!();
         }
@@ -1273,7 +1289,13 @@ fn main() {
             }
             Some("L") => {
                 app.ledger_report = Some(ledger::report(7));
+                app.ledger_peaks = ledger::peaks(8);
                 app.mode = Mode::Ledger;
+            }
+            Some("t") if app.mode == Mode::Ledger => {
+                app.flash = Some((tally::toggle(), std::time::Instant::now()));
+                app.ledger_report = Some(ledger::report(7));
+                app.ledger_peaks = ledger::peaks(8);
             }
             Some("S") => {
                 if app.mode == Mode::Table {

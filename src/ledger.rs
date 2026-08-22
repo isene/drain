@@ -79,6 +79,15 @@ pub struct Report {
 }
 
 /// Aggregate the ledger's last `days` distinct days.
+/// The expensive stretches the tally recorded: when, how many watts,
+/// and who was busy. Newest first, empty when the tally has not run.
+pub fn peaks(n: usize) -> Vec<String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let text = std::fs::read_to_string(home.join(".drain").join("peaks.tsv"))
+        .unwrap_or_default();
+    text.lines().rev().take(n).map(|l| l.replace('\t', "  ")).collect()
+}
+
 pub fn report(days: usize) -> Report {
     let text = std::fs::read_to_string(path()).unwrap_or_default();
     let mut dates: Vec<&str> = text

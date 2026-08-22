@@ -215,6 +215,10 @@ tally once and the days fill in on their own:
 drain --tally &          # or from your WM's autostart
 ```
 
+`L` in the TUI shows the same thing, says whether it is recording, and
+`t` there turns it on or off. That also comments or uncomments the
+autostart line in `~/.tilerc`, so the choice survives the next login.
+
 It follows upower, which your desktop already runs and which already
 samples the battery. Its signal carries Energy in watt-hours, so the
 tally adds no timer of its own: one blocking read on a pipe, and no

@@ -226,6 +226,93 @@ fn run_upower(dir: &Path) -> bool {
     seen
 }
 
+/// The running tally's pid, found by its own argument rather than by
+/// name: drain itself must not match.
+pub fn running_pid() -> Option<u32> {
+    for e in std::fs::read_dir("/proc").ok()?.flatten() {
+        let pid: u32 = match e.file_name().to_string_lossy().parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let cmd = std::fs::read(e.path().join("cmdline")).unwrap_or_default();
+        let args: Vec<String> = cmd
+            .split(|b| *b == 0)
+            .map(|s| String::from_utf8_lossy(s).to_string())
+            .collect();
+        if args.iter().any(|a| a.ends_with("drain")) && args.iter().any(|a| a == "--tally") {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+/// Start or stop the tally, and keep the autostart line in ~/.tilerc in
+/// step, so the choice survives the next login. Returns what happened.
+pub fn toggle() -> String {
+    match running_pid() {
+        Some(pid) => {
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            let rc = set_autostart(false);
+            format!("ledger off (stopped pid {}){}", pid, rc)
+        }
+        None => {
+            let exe = std::env::current_exe()
+                .unwrap_or_else(|_| PathBuf::from("drain"));
+            let ok = std::process::Command::new("setsid")
+                .arg(&exe)
+                .arg("--tally")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .is_ok();
+            if !ok {
+                return "could not start the tally".into();
+            }
+            let rc = set_autostart(true);
+            format!("ledger on{}", rc)
+        }
+    }
+}
+
+/// Comment or uncomment the tilerc autostart line, writing one in if it
+/// is missing. Returns a note for the flash message, empty when the file
+/// needed no change.
+fn set_autostart(on: bool) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let rc = home.join(".tilerc");
+    let Ok(text) = std::fs::read_to_string(&rc) else { return String::new() };
+    let mut out: Vec<String> = Vec::with_capacity(text.lines().count() + 1);
+    let mut seen = false;
+    for line in text.lines() {
+        if line.contains("drain --tally") {
+            seen = true;
+            let bare = line.trim_start_matches(['#', ' ']).to_string();
+            out.push(if on { bare } else { format!("#{}", bare) });
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    if !seen {
+        if !on {
+            return String::new(); // nothing to disable
+        }
+        // Put it with the other autostarts, after the last exec line.
+        let last = out.iter().rposition(|l| l.starts_with("exec "));
+        let line = format!(
+            "exec {}/bin/drain --tally    # battery ledger (drain: L, t toggles)",
+            home.display());
+        match last {
+            Some(i) => out.insert(i + 1, line),
+            None => out.push(line),
+        }
+    }
+    let body = out.join("\n") + "\n";
+    match std::fs::write(&rc, body) {
+        Ok(()) => ", autostart updated".into(),
+        Err(_) => ", but ~/.tilerc could not be written".into(),
+    }
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
