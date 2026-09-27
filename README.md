@@ -116,6 +116,7 @@ strace mode, or set `kernel.yama.ptrace_scope = 0` for your session.
 | `+` / `-` | refresh interval ±0.5s (range 0.5s … 10s) |
 | `p` / `f` | pause / unpause sampling |
 | `I` | re-query claude analysis |
+| `Ctrl+A` | a full Claude session about the drain, as in every Fe₂O₃ app |
 | `Ctrl+Y` | copy claude analysis to clipboard (OSC 52) |
 | `r` | reset rolling-average bat watt readout |
 | `h` / `?` | toggle help line in footer |

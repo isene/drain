@@ -947,7 +947,7 @@ fn keys_line(app: &App) -> String {
     }
     if app.show_help {
         format!(
-            " q quit · ↑↓ sel · Enter threads (firefox-bin→tabs) · S strace · O orphans · L ledger · s sort ({}) · d diff · / filter · +/- Δt · p pause · I claude · C-y copy · r reset · h hide help",
+            " q quit · ↑↓ sel · Enter threads (firefox-bin→tabs) · S strace · O orphans · L ledger · s sort ({}) · d diff · / filter · +/- Δt · p pause · I claude · C-a talk · C-y copy · r reset · h hide help",
             app.sort.label()
         )
     } else {
@@ -1363,7 +1363,20 @@ fn main() {
                 app.flash = Some(("Reset rolling average.".to_string(), Instant::now()));
             }
             Some("h") | Some("H") | Some("?") => app.show_help = !app.show_help,
-            Some("RESIZE") => {
+            // Ctrl+A, as in every Fe2O3 app: a full Claude session about
+            // the drain, then the same full repaint a resize gets.
+            Some(k @ ("RESIZE" | "C-A")) => {
+                if k == "C-A" {
+                    let watts = app.bat_avg.avg().map(|w| format!("The laptop draws {w:.1} W on average.\n\n")).unwrap_or_default();
+                    let ctx = format!(
+                        "{watts}The analysis on screen:\n{}\n\nTop processes:\n{}",
+                        app.claude_text.lock().unwrap().clone(),
+                        app.top_summary(25)
+                    );
+                    if !crust::claude_session("drain", "I am in drain, my monitor of what drains the laptop's battery.", &ctx) {
+                        app.flash = Some(("claude is not on the PATH".to_string(), Instant::now()));
+                    }
+                }
                 let (c2, r2) = Crust::terminal_size();
                 let l2 = compute_layout(c2, r2);
                 header = Pane::new(1, 1, c2, 1, 255, 236);
