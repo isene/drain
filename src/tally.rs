@@ -174,11 +174,21 @@ pub fn run() {
 /// kernel socket.
 fn run_upower(dir: &Path) -> bool {
     use std::io::BufRead;
-    let child = std::process::Command::new("gdbus")
-        .args(["monitor", "--system", "--dest", "org.freedesktop.UPower"])
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new("gdbus");
+    cmd.args(["monitor", "--system", "--dest", "org.freedesktop.UPower"])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+        .stderr(std::process::Stdio::null());
+    // GLib ignores SIGPIPE, so gdbus never notices a dead reader and
+    // would wake on every upower signal forever. It goes with drain.
+    // SAFETY: prctl touches only the new process, before exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+    let child = cmd.spawn();
     let Ok(mut child) = child else { return false };
     let Some(out) = child.stdout.take() else { return false };
     let mut last: Option<f64> = None;
