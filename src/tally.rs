@@ -34,6 +34,10 @@ const PEAK_W: f64 = 6.0;
 /// Never sample more often than this, so a long expensive stretch costs
 /// a handful of samples rather than one per signal.
 const PEAK_GAP_S: u64 = 300;
+/// Red alert: herald's pulsing red banner at 10 % and again at 5 %,
+/// while discharging and while ~/.drain/red-alert exists (fx switches
+/// it). Above 10 % the check costs nothing, not even a stat().
+const RED_AT: [f64; 2] = [10.0, 5.0];
 
 fn bat_dir() -> Option<PathBuf> {
     let rd = std::fs::read_dir("/sys/class/power_supply").ok()?;
@@ -187,9 +191,40 @@ fn run_upower(dir: &Path) -> bool {
     // PropertiesChanged carries only what changed, so a steady draw
     // stops being repeated. Remember the last rate we were told.
     let mut rate = 0.0f64;
+    // upower sends the percentage and the state only when they change.
+    let mut pct = read_num(dir, "capacity").unwrap_or(100.0);
+    let mut dis = discharging(dir);
+    let mut red: Option<(f64, u32)> = None; // the mark shown, and its box
     for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
         // The DisplayDevice repeats the same numbers; take the battery.
-        if !line.contains("battery_") || !line.contains("'Energy':") {
+        if !line.contains("battery_") {
+            continue;
+        }
+        if let Some(p) = field(&line, "'Percentage': <") {
+            pct = p;
+        }
+        if let Some(s) = field(&line, "'State': <") {
+            dis = s == 2.0;
+        }
+        if pct <= RED_AT[0] || red.is_some() {
+            match red_step(red.map(|r| r.0), pct, dis) {
+                Red::Show(mark) => {
+                    let id = red.map_or(0, |r| r.1);
+                    let wh = field(&line, "'Energy': <").or(last);
+                    let w = field(&line, "'EnergyRate': <").unwrap_or(rate);
+                    let mins = wh.filter(|_| w > 0.3).map(|wh| (wh / w * 60.0) as u32);
+                    let on = red_flag().exists();
+                    red = Some((mark, if on { red_notify(id, pct, mins) } else { id }));
+                }
+                Red::Close => {
+                    if let Some((_, id)) = red.take().filter(|r| r.1 > 0) {
+                        red_close(id);
+                    }
+                }
+                Red::Keep => {}
+            }
+        }
+        if !line.contains("'Energy':") {
             continue;
         }
         let Some(now) = field(&line, "'Energy': <") else { continue };
@@ -362,9 +397,62 @@ fn record_peak(date: &str, watts: f64) {
 }
 
 /// The number after `key` in a gdbus line: `'Energy': <15.97>`.
+/// The number after `key`, past a type word such as `uint32` if any.
 fn field(line: &str, key: &str) -> Option<f64> {
     let rest = line.split(key).nth(1)?;
-    rest.split('>').next()?.trim().parse::<f64>().ok()
+    rest.split('>').next()?.split_whitespace().last()?.parse::<f64>().ok()
+}
+
+#[derive(Debug, PartialEq)]
+enum Red {
+    Keep,
+    Show(f64),
+    Close,
+}
+
+/// What the red alert does now, given the mark already shown (if any).
+/// The charger going in takes it down; each lower mark shows it again.
+fn red_step(shown: Option<f64>, pct: f64, discharging: bool) -> Red {
+    if !discharging {
+        return if shown.is_some() { Red::Close } else { Red::Keep };
+    }
+    match RED_AT.iter().rev().find(|m| pct <= **m) {
+        Some(&m) if shown.is_none_or(|s| m < s) => Red::Show(m),
+        _ => Red::Keep,
+    }
+}
+
+fn red_flag() -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    home.join(".drain").join("red-alert")
+}
+
+/// Ask the notification service for the alert, replacing box `id` when
+/// it is still up. Returns the box's id, or 0 when nobody answered.
+fn red_notify(id: u32, pct: f64, mins: Option<u32>) -> u32 {
+    let left = mins.map(|m| format!(" About {m} minutes left.")).unwrap_or_default();
+    let body = format!("Battery at {pct:.0} %.{left} Plug in the charger.");
+    let out = notifications("Notify")
+        .args(["drain", &id.to_string(), "", "RED ALERT", &body, "[]"])
+        .args(["{'urgency': <byte 2>, 'category': <'red-alert'>}", "0"])
+        .output();
+    // gdbus prints the reply as "(uint32 7,)".
+    out.ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().trim_start_matches("(uint32 ").trim_end_matches(",)").parse().ok())
+        .unwrap_or(0)
+}
+
+fn red_close(id: u32) {
+    let _ = notifications("CloseNotification").arg(id.to_string()).output();
+}
+
+fn notifications(method: &str) -> std::process::Command {
+    let mut c = std::process::Command::new("gdbus");
+    c.args(["call", "--session", "--dest", "org.freedesktop.Notifications"])
+        .args(["--object-path", "/org/freedesktop/Notifications", "--method"])
+        .arg(format!("org.freedesktop.Notifications.{method}"));
+    c
 }
 
 fn run_netlink(dir: &Path) {
@@ -396,4 +484,29 @@ fn run_netlink(dir: &Path) {
         }
     }
     append(&date, pending);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn red_alert_shows_at_each_mark_once_and_goes_with_the_charger() {
+        assert_eq!(red_step(None, 11.0, true), Red::Keep);
+        assert_eq!(red_step(None, 10.0, true), Red::Show(10.0));
+        assert_eq!(red_step(Some(10.0), 7.0, true), Red::Keep);
+        assert_eq!(red_step(Some(10.0), 5.0, true), Red::Show(5.0));
+        assert_eq!(red_step(None, 3.0, true), Red::Show(5.0));
+        assert_eq!(red_step(Some(5.0), 2.0, true), Red::Keep);
+        assert_eq!(red_step(Some(5.0), 4.0, false), Red::Close);
+        assert_eq!(red_step(None, 4.0, false), Red::Keep);
+    }
+
+    #[test]
+    fn fields_read_past_their_type_word() {
+        let l = "{'State': <uint32 2>, 'Percentage': <9.0>, 'Energy': <5.25>}";
+        assert_eq!(field(l, "'State': <"), Some(2.0));
+        assert_eq!(field(l, "'Percentage': <"), Some(9.0));
+        assert_eq!(field(l, "'Energy': <"), Some(5.25));
+    }
 }

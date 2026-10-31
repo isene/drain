@@ -234,6 +234,14 @@ who was busy. At most one such sample every five minutes, and none at
 all below the threshold, so an idle machine pays nothing. Set
 `DRAIN_PEAK_W` to move the line.
 
+Red alert: while `~/.drain/red-alert` exists, the tally asks the
+notification service for a red alert when the battery falls to 10 %,
+and again at 5 %, with the minutes left. It takes the alert down when
+the charger goes in. [herald](https://github.com/isene/herald) draws it
+as big red letters between two pulsing red bars; any other service
+shows a critical notification. Above 10 % the check costs nothing, not
+even a look for the file. [fx](https://github.com/isene/fx) switches it.
+
 ```
 $ drain --ledger
 Expensive stretches (>= 6 W), newest first
