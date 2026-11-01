@@ -615,7 +615,7 @@ fn render_suite(pane: &mut Pane, app: &App, cols: u16) {
 
 fn render_table(pane: &mut Pane, app: &App, rows: usize) {
     let header = format!(
-        " {:>8}  {:<20}  {:>2}  {}  {:>8}  {:>8}  {:>8}  {:>5}",
+        " {:>8}  {:<20}  {:>3}  {}  {:>8}  {:>8}  {:>8}  {:>5}",
         "PID",
         "PROC",
         "WS",
@@ -636,10 +636,12 @@ fn render_table(pane: &mut Pane, app: &App, rows: usize) {
         // so the user can tell at a glance whether the row owns the
         // window or borrowed it from an ancestor.
         let ws = match app.resolve_ws(d.pid) {
-            WsAttribution::Direct(n) => format!("{}", n + 1),
-            WsAttribution::Inherited(n) => style::dim(&format!("{}~", n + 1)),
-            WsAttribution::Unknown => "?".to_string(),
-            WsAttribution::None => "·".to_string(),
+            WsAttribution::Direct(n) => format!("{:>3}", n + 1),
+            // Padded before dimming: the escape codes would count
+            // towards the width and shift the row.
+            WsAttribution::Inherited(n) => style::dim(&format!("{:>3}", format!("{}~", n + 1))),
+            WsAttribution::Unknown => format!("{:>3}", "?"),
+            WsAttribution::None => format!("{:>3}", "·"),
         };
         let comm = comm_short(&d.comm, 20);
         let dot_str = dots(d.drain);
@@ -658,7 +660,7 @@ fn render_table(pane: &mut Pane, app: &App, rows: usize) {
             "".to_string()
         };
         let line = format!(
-            "{} {:>8}  {}  {:>2}  {}  {:>8.1}  {:>8.1}  {:>8.1}  {}",
+            "{} {:>8}  {}  {}  {}  {:>8.1}  {:>8.1}  {:>8.1}  {}",
             badge,
             d.pid,
             comm,
@@ -1308,8 +1310,13 @@ fn main() {
     loop {
         let in_core = app.mode == Mode::Core;
         if in_core != was_core {
-            // The core and the table share the rows under the header;
-            // whichever comes back paints all of its rows again.
+            // The core and the table share the rows under the header,
+            // and the core shows through the gaps between the panes, so
+            // the whole screen is wiped and every pane paints again.
+            Crust::clear_screen();
+            header.invalidate();
+            suite_pane.invalidate();
+            footer.invalidate();
             table.invalidate();
             analysis.invalidate();
             core_pane.invalidate();
