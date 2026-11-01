@@ -74,11 +74,7 @@ fn discharging(dir: &Path) -> bool {
 }
 
 fn today() -> String {
-    let out = std::process::Command::new("date").arg("+%Y-%m-%d").output();
-    out.ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
+    crate::power::local_now().0
 }
 
 fn append(date: &str, wh: f64) {
@@ -243,6 +239,9 @@ fn run_upower(dir: &Path) -> bool {
         if let Some(w) = field(&line, "'EnergyRate': <") {
             rate = w;
         }
+        // One line per reading for the power core's timeline.
+        let (d, secs) = crate::power::local_now();
+        crate::power::log(&d, secs, rate, dis);
         let t = unix_now();
         if rate >= peak_w && discharging(dir)
             && t.saturating_sub(last_peak) >= PEAK_GAP_S
@@ -256,11 +255,11 @@ fn run_upower(dir: &Path) -> bool {
             }
         }
         last = Some(now);
-        let d = today();
         if d != date {
             append(&date, pending);
             pending = 0.0;
             date = d;
+            crate::power::prune();
         } else if pending >= FLUSH_WH {
             append(&date, pending);
             pending = 0.0;

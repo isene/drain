@@ -4,7 +4,7 @@
 
 **Battery-drain triage TUI. Catches the polling loop you didn't mean to write.**
 
-![Version](https://img.shields.io/badge/version-0.1.9-blue) ![Rust](https://img.shields.io/badge/language-Rust-f74c00) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux-blue) ![Stay Amazing](https://img.shields.io/badge/Stay-Amazing-important)
+![Version](https://img.shields.io/badge/version-0.1.25-blue) ![Rust](https://img.shields.io/badge/language-Rust-f74c00) ![License](https://img.shields.io/badge/license-Unlicense-green) ![Platform](https://img.shields.io/badge/platform-Linux-blue) ![Stay Amazing](https://img.shields.io/badge/Stay-Amazing-important)
 
 Small TUI that answers one question fast: **what is draining my
 battery right now, and did I just make it worse?**
@@ -106,10 +106,12 @@ strace mode, or set `kernel.yama.ptrace_scope = 0` for your session.
 | `Enter` | expand selected pid into per-thread view |
 | `S` | attach `strace -c` to selected pid for 3s |
 | `O` | open / rescan the orphan (held-resource) view |
+| `w` | the power core: the watts as a warp core, and the day's watts |
+| `L` | the battery ledger: watt-hours per app per day |
 | `k` / `K` | in orphan/Firefox view: SIGTERM / SIGKILL the selected (y/n confirm) |
 | `a` | in orphan view: allowlist the selected holder (persisted) |
 | `Enter` | per-thread view — or, on a `firefox-bin` row, the Firefox tab view |
-| `Esc` | close threads / strace / orphan / Firefox overlay |
+| `Esc` | close threads / strace / orphan / Firefox / ledger / power core |
 | `s` | cycle sort: drain → cpu → wakes → io → drain |
 | `d` | toggle diff mode (highlight anomalies vs baseline) |
 | `/` | enter filter; type substring; `Enter` apply, `Esc` cancel |
@@ -257,12 +259,37 @@ that the fallback is thin: an ACPI battery may emit no uevent at all on
 a capacity change (this laptop emits none in seven minutes of
 discharge), so it then catches AC transitions and little else.
 
+## The power core
+
+`w` in the TUI, or `drain --core`, shows the battery as a warp core
+beside a chart of the day.
+
+![The power core](img/core.png)
+
+- The bands in the core run inward on battery, faster as the watts
+  climb, and outward while charging. The core is blue at low draw,
+  turns amber by 8 W and red by 11 W.
+- The chart is the day's watts in the same colours, a green line along
+  the bottom while on the charger, and a mark at the time now.
+- Above it: the draw now, the charge, the time left, the watt-hours
+  used on battery today and the highest draw. Below it: the processes
+  drawing the most now.
+
+The day comes from the tally, which writes one line per upower reading
+to `~/.drain/watts/<date>.tsv` and keeps 30 days. Without the tally the
+chart fills only while the view is open.
+
+The core moves five times a second, and only while it is on screen.
+On this laptop the open view costs about 5 % of one CPU core, most of
+it in the X server drawing the frames. Closed, it costs nothing.
+
 ## Files
 
 ```
 ~/.cache/drain/state.json   persistent baseline (bat W avg + per-comm wakes/cpu medians)
 ~/.drain/ledger.tsv         the ledger: <date> <comm|__wh__> <cpu_s|watt_hours>
 ~/.drain/peaks.tsv          expensive stretches: <when> <watts> <who was busy>
+~/.drain/watts/<date>.tsv   the tally's readings: <HH:MM:SS> <watts> <D|C>
 ```
 
 ## Related

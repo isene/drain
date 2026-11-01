@@ -8,6 +8,7 @@
 
 mod baseline;
 mod clipboard;
+mod power;
 mod orphans;
 mod sample;
 mod ledger;
@@ -75,6 +76,24 @@ enum Mode {
     /// Firefox content/helper processes (the per-tab Fission renderers),
     /// opened with ENTER on firefox-bin. Selectable; k/K kill the tab.
     Firefox,
+    /// The power core: a warp core pulsing with the watts, and the day.
+    Core,
+}
+
+/// Width of the warp core in cells.
+const CORE_W: u16 = 24;
+
+/// The power core's state, kept only while the view is open.
+struct CoreView {
+    date: String,
+    /// Today's readings: the tally's file, then one per tick.
+    samples: Vec<power::Sample>,
+    bat: Option<(f64, Option<f64>, char)>,
+    pct: Option<u8>,
+    /// Where the bands are, 0..1, moved on by the watts every frame.
+    phase: f64,
+    t0: Instant,
+    last: Instant,
 }
 
 /// Outcome of resolving a pid → workspace. Inherited is rendered with
@@ -135,6 +154,7 @@ struct App {
     ledger_report: Option<ledger::Report>,
     /// Expensive stretches, read when the ledger view opens.
     ledger_peaks: Vec<String>,
+    core: Option<CoreView>,
 }
 
 struct BatRing {
@@ -201,6 +221,7 @@ impl App {
             ledger: ledger::Ledger::new(today_iso()),
             ledger_report: None,
             ledger_peaks: Vec::new(),
+            core: None,
         }
     }
 
@@ -223,6 +244,18 @@ impl App {
         let bat = sample::battery();
         if let Some((w, _, _)) = bat {
             self.bat_avg.push(w);
+        }
+        if let Some(cv) = self.core.as_mut().filter(|_| self.mode == Mode::Core) {
+            let (date, secs) = power::local_now();
+            if date != cv.date {
+                cv.samples.clear();
+                cv.date = date;
+            }
+            if let Some((w, _, st)) = bat {
+                cv.samples.push(power::Sample { secs, watts: w as f32, dis: st == 'D' });
+            }
+            cv.bat = bat;
+            cv.pct = power::capacity();
         }
         // Ledger accounting: charge each process its CPU share of the
         // interval; integrate Wh only while actually discharging.
@@ -358,8 +391,23 @@ impl App {
 
     fn close_overlay(&mut self) {
         self.thread_view = None;
+        self.core = None;
         self.mode = Mode::Table;
         self.selected = 0;
+    }
+
+    fn open_core(&mut self) {
+        let (date, _) = power::local_now();
+        self.core = Some(CoreView {
+            samples: power::read_day(&date),
+            date,
+            bat: sample::battery(),
+            pct: power::capacity(),
+            phase: 0.0,
+            t0: Instant::now(),
+            last: Instant::now(),
+        });
+        self.mode = Mode::Core;
     }
 
     /// Firefox content/helper processes (the Fission per-tab renderers),
@@ -817,6 +865,80 @@ fn render_firefox(pane: &mut Pane, app: &App, _rows: usize) {
     pane.refresh();
 }
 
+/// One frame of the warp core. The bands move on by the time since the
+/// last frame, at a speed set by the watts: inward on battery, outward
+/// while charging, slow when the battery is full.
+fn render_core(pane: &mut Pane, app: &mut App) {
+    let Some(cv) = app.core.as_mut() else { return };
+    let (w, st) = cv.bat.map_or((0.0, 'F'), |b| (b.0, b.2));
+    let hz = if matches!(st, 'D' | 'C') { (0.25 + 0.11 * w).min(3.0) } else { 0.15 };
+    cv.phase = (cv.phase + hz * cv.last.elapsed().as_secs_f64()) % 1.0;
+    cv.last = Instant::now();
+    let phase = if st == 'C' { -cv.phase } else { cv.phase };
+    let lines = power::core(pane.w as usize, pane.h as usize, phase,
+                            cv.t0.elapsed().as_secs_f64(), st, w);
+    pane.set_text(&lines.join("\n"));
+    pane.refresh();
+}
+
+/// The words beside the core: the draw now, the day so far as a chart,
+/// and what draws it now. Drawn once a second.
+fn render_core_side(pane: &mut Pane, app: &App) {
+    let Some(cv) = &app.core else { return };
+    let width = pane.w as usize;
+    let rows = pane.h as usize;
+    let mut out = power::pill("POWER CORE", (255, 153, 0), width);
+    out.push_str("\n\n");
+    match cv.bat {
+        Some((w, hours, st)) => {
+            let c = power::rgb8(power::tint(w));
+            let state = match st {
+                'D' => "on battery",
+                'C' => "charging",
+                'F' => "full",
+                _ => "on the charger",
+            };
+            out.push_str(&format!("  {}  {}", style::rgb(&format!("{w:.2} W"), Some(c), None, "b"), state));
+            if let Some(p) = cv.pct {
+                out.push_str(&format!("   {p} %"));
+            }
+            if let Some(h) = hours {
+                out.push_str(&format!("   {}h {:02}m left", h as u32, (h.fract() * 60.0) as u32));
+            }
+        }
+        None => out.push_str("  no battery found"),
+    }
+    let (wh, peak) = power::day_sums(&cv.samples);
+    out.push_str(&format!("\n  {wh:.1} Wh on battery today"));
+    if let Some(p) = peak {
+        out.push_str(&format!(", the most {:.1} W at {:02}:{:02}", p.watts, p.secs / 3600, p.secs / 60 % 60));
+    }
+    out.push_str("\n\n");
+    out.push_str(&power::pill("WATTS TODAY", (204, 153, 204), width));
+    out.push('\n');
+    let tl_rows = rows.saturating_sub(16).clamp(4, 16);
+    let now = power::local_now().1;
+    for l in power::timeline(&cv.samples, width, tl_rows, now) {
+        out.push_str(&l);
+        out.push('\n');
+    }
+    if cv.samples.is_empty() {
+        out.push_str(&style::dim("  nothing on record today: the tally (L, then t) writes the day\n"));
+    }
+    out.push('\n');
+    out.push_str(&power::pill("DRAWING NOW", (153, 153, 255), width));
+    out.push('\n');
+    let mut top: Vec<&Delta> = app.deltas.iter().filter(|d| d.cpu_pct >= 0.1).collect();
+    top.sort_by(|a, b| b.drain.partial_cmp(&a.drain).unwrap_or(std::cmp::Ordering::Equal));
+    let n = rows.saturating_sub(11 + tl_rows).clamp(3, 12);
+    for d in top.iter().take(n) {
+        out.push_str(&format!("  {} {:>6.1} % cpu {:>7.0} wakes/s\n",
+            comm_short(&d.comm, 20), d.cpu_pct, d.wakes_per_s));
+    }
+    pane.set_text(out.trim_end_matches('\n'));
+    pane.refresh();
+}
+
 fn render_ledger(pane: &mut Pane, app: &App) {
     let mut out = String::new();
     out.push_str(&style::styled(
@@ -939,7 +1061,7 @@ fn keys_line(app: &App) -> String {
     if app.mode == Mode::Orphans {
         return " ↑↓ select · k SIGTERM · K SIGKILL · a allowlist · O rescan · Esc back".to_string();
     }
-    if app.mode == Mode::Ledger {
+    if matches!(app.mode, Mode::Ledger | Mode::Core) {
         return " Esc back".to_string();
     }
     if app.mode == Mode::Firefox {
@@ -947,11 +1069,11 @@ fn keys_line(app: &App) -> String {
     }
     if app.show_help {
         format!(
-            " q quit · ↑↓ sel · Enter threads (firefox-bin→tabs) · S strace · O orphans · L ledger · s sort ({}) · d diff · / filter · +/- Δt · p pause · I claude · C-a talk · C-y copy · r reset · h hide help",
+            " q quit · ↑↓ sel · Enter threads (firefox-bin→tabs) · S strace · O orphans · L ledger · w power core · s sort ({}) · d diff · / filter · +/- Δt · p pause · I claude · C-a talk · C-y copy · r reset · h hide help",
             app.sort.label()
         )
     } else {
-        " q · ↑↓ · Enter · S · O · s · d · / · +/- · p · c · C-y · r · h help".to_string()
+        " q · ↑↓ · Enter · S · O · w · s · d · / · +/- · p · c · C-y · r · h help".to_string()
     }
 }
 
@@ -1083,8 +1205,10 @@ fn main() {
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
         println!("drain — Battery-drain triage (Fe2O3 suite)");
         println!();
-        println!("Usage: drain [--orphans | --ledger]");
+        println!("Usage: drain [--core | --orphans | --ledger]");
         println!();
+        println!("  --core       open on the power core: the watts as a warp core,");
+        println!("               and the day's watts from the tally (key w)");
         println!("  --orphans    list orphaned processes as text and exit");
         println!("  --ledger     battery ledger (Wh per app per day) and exit");
         println!("  --tally      accrue Wh into the ledger in the background,");
@@ -1173,21 +1297,56 @@ fn main() {
     std::thread::sleep(std::time::Duration::from_millis(800));
     app.tick();
     spawn_claude_query(Arc::clone(&app.claude_text), app.top_summary(8), app.bat_avg.avg());
+    if std::env::args().skip(1).any(|a| a == "--core") {
+        app.open_core();
+    }
+    let (mut core_pane, mut core_side) = core_panes(cols, layout.body_h);
+    let mut full = true;
+    let mut was_core = false;
+    let mut last_full = Instant::now();
 
     loop {
-        render_header(&mut header, &app, cols);
-        render_suite(&mut suite_pane, &app, cols);
+        let in_core = app.mode == Mode::Core;
+        if in_core != was_core {
+            // The core and the table share the rows under the header;
+            // whichever comes back paints all of its rows again.
+            table.invalidate();
+            analysis.invalidate();
+            core_pane.invalidate();
+            core_side.invalidate();
+            was_core = in_core;
+            full = true;
+        }
+        if full {
+            render_header(&mut header, &app, cols);
+            render_suite(&mut suite_pane, &app, cols);
+            last_full = Instant::now();
+        }
         match app.mode {
+            Mode::Core => {
+                if full {
+                    render_core_side(&mut core_side, &app);
+                }
+                render_core(&mut core_pane, &mut app);
+            }
             Mode::Threads(_) => render_threads(&mut table, &app, layout.body_h as usize),
             Mode::Orphans => render_orphans(&mut table, &app, layout.body_h as usize),
             Mode::Ledger => render_ledger(&mut table, &app),
             Mode::Firefox => render_firefox(&mut table, &app, layout.body_h as usize),
             _ => render_table(&mut table, &app, layout.body_h as usize),
         }
-        render_analysis(&mut analysis, &app);
-        render_footer(&mut footer, &app, cols);
+        if !in_core {
+            render_analysis(&mut analysis, &app);
+        }
+        if full {
+            render_footer(&mut footer, &app, cols);
+        }
 
-        let key = Input::getchr(Some(1));
+        // The core moves five times a second while it is on screen; the
+        // rest waits for a key or the next second, as before. Eight a
+        // second cost frame twice the CPU for little smoother bands.
+        let key = if in_core { Input::getchr_ms(200) } else { Input::getchr(Some(1)) };
+        full = !in_core || key.is_some() || last_full.elapsed().as_millis() >= 950;
         let key_s = key.as_deref();
 
         // FilterEdit captures keystrokes for the filter string.
@@ -1283,10 +1442,11 @@ fn main() {
             }
             Some("ESC") => {
                 if matches!(app.mode, Mode::Threads(_) | Mode::Orphans
-                            | Mode::Firefox | Mode::Ledger) {
+                            | Mode::Firefox | Mode::Ledger | Mode::Core) {
                     app.close_overlay();
                 }
             }
+            Some("w") => app.open_core(),
             Some("L") => {
                 app.ledger_report = Some(ledger::report(7));
                 app.ledger_peaks = ledger::peaks(8);
@@ -1392,6 +1552,7 @@ fn main() {
                 );
                 analysis.wrap = true;
                 footer = Pane::new(1, r2, c2, 1, 244, 236);
+                (core_pane, core_side) = core_panes(c2, l2.body_h);
             }
             _ => {}
         }
@@ -1402,6 +1563,17 @@ fn main() {
     baseline::save(&app.baseline);
     app.ledger.save();
     Crust::cleanup();
+}
+
+/// The warp core on the left and its words on the right, under the header.
+fn core_panes(cols: u16, body_h: u16) -> (Pane, Pane) {
+    let mut core = Pane::new(1, 3, CORE_W, body_h, 231, 0);
+    let mut side = Pane::new(CORE_W + 1, 3, cols.saturating_sub(CORE_W), body_h, 231, 0);
+    for p in [&mut core, &mut side] {
+        p.wrap = false;
+        p.scroll = false;
+    }
+    (core, side)
 }
 
 struct Layout {
