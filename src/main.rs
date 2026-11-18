@@ -1046,7 +1046,7 @@ fn render_footer(pane: &mut Pane, app: &App, cols: u16) {
     } else {
         keys_line(app)
     };
-    let right = format!("drain v{} ", VERSION);
+    let right = crust::version_tag("drain", VERSION);
     let lvis = strip_ansi_for_width(&left).chars().count();
     let rvis = strip_ansi_for_width(&right).chars().count();
     let total = cols as usize;
